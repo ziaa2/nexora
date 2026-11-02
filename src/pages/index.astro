@@ -1,0 +1,60 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import BottomNav from '../components/BottomNav.astro';
+---
+<BaseLayout>
+  <Header />
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse"></span> THE ANIME KNOWLEDGE UNIVERSE</div>
+        <h1>Jelajahi dunia<br /><em>di balik anime.</em></h1>
+        <p>Temukan karakter, kekuatan, organisasi, hubungan, dan cerita dari universe anime favoritmu.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="/nexora/anime/">Jelajahi database <span>↗</span></a>
+          <a class="button ghost" href="/nexora/characters/">Temukan karakter</a>
+        </div>
+      </div>
+      <div class="hero-art">
+        <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+        <div class="art-core"><span>N</span></div>
+        <div class="art-caption"><small>KNOWLEDGE BASE</small><strong>ANIME UNIVERSE</strong></div>
+      </div>
+    </section>
+
+    <section class="search-panel">
+      <div><span class="search-icon">⌕</span><input id="global-search" placeholder="Cari anime, karakter, clan, ability..." /></div>
+      <button id="search-button" aria-label="Cari">Cari ↗</button>
+    </section>
+
+    <section class="section">
+      <div class="section-heading"><div><span class="eyebrow">EXPLORE DATABASE</span><h2>Jelajahi NEXORA</h2></div><span class="muted">Semua dalam satu universe.</span></div>
+      <div class="category-grid">
+        <a class="category-card" href="/nexora/anime/"><span class="category-icon">◈</span><strong>Anime</strong><small>Series dan universe</small><b>↗</b></a>
+        <a class="category-card" href="/nexora/characters/"><span class="category-icon">♙</span><strong>Karakter</strong><small>Profil dan biodata</small><b>↗</b></a>
+        <a class="category-card" href="/nexora/abilities/"><span class="category-icon">✧</span><strong>Abilities</strong><small>Teknik dan kekuatan</small><b>↗</b></a>
+        <a class="category-card" href="/nexora/universe/"><span class="category-icon">⌘</span><strong>Universe</strong><small>Clan, tim, organisasi</small><b>↗</b></a>
+        <a class="category-card" href="/nexora/locations/"><span class="category-icon">◎</span><strong>Locations</strong><small>Tempat dan wilayah</small><b>↗</b></a>
+        <a class="category-card" href="/nexora/lore/"><span class="category-icon">▤</span><strong>Lore & Stories</strong><small>Sejarah dan kisah</small><b>↗</b></a>
+      </div>
+    </section>
+
+    <section class="section featured-section">
+      <div class="section-heading"><div><span class="eyebrow">START YOUR JOURNEY</span><h2>Universe pilihan</h2></div></div>
+      <div class="feature-placeholder">
+        <div class="feature-symbol">N</div>
+        <div><span class="eyebrow">NEXORA DATABASE</span><h3>Knowledge is an endless universe.</h3><p>Konten anime akan tampil di sini setelah data pertama ditambahkan melalui Admin.</p></div>
+        <a class="button ghost" href="/nexora/admin/">Buka Admin ↗</a>
+      </div>
+    </section>
+    <footer><a class="brand" href="/nexora/"><span class="brand-mark">N</span><span>NEXORA</span></a><span>Anime Knowledge Universe · Made for exploration</span></footer>
+  </main>
+  <BottomNav />
+  <script>
+    const input = document.querySelector('#global-search');
+    const go = () => { const q = input.value.trim(); if (q) window.location.href = '/nexora/search/?q=' + encodeURIComponent(q); };
+    document.querySelector('#search-button').addEventListener('click', go);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  </script>
+</BaseLayout>
