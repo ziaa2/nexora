@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+---
+<BaseLayout title="Search — NEXORA">
+  <Header />
+  <main class="page-shell"><span class="eyebrow">DISCOVER</span><h1>Search <em>NEXORA.</em></h1>
+  <p class="muted">Pencarian global anime, karakter, dan universe.</p>
+  <div class="empty-state"><span>⌕</span><h2 id="query-title">Cari sesuatu</h2><p>Fitur pencarian database akan diaktifkan setelah integrasi data.</p></div></main>
+  <script>const q = new URLSearchParams(location.search).get('q'); if(q) document.querySelector('#query-title').textContent = 'Hasil untuk: ' + q;</script>
+</BaseLayout>
