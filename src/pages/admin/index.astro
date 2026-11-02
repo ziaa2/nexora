@@ -1,0 +1,43 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+---
+<BaseLayout title="Admin Login — NEXORA">
+  <Header />
+  <main class="admin-wrap">
+    <section class="admin-card">
+      <span class="eyebrow">NEXORA CONTROL CENTER</span>
+      <h1>Admin <em>Sign in.</em></h1>
+      <p class="muted">Masuk untuk mengelola database NEXORA.</p>
+      <form id="login-form">
+        <label>Email</label><input id="email" type="email" autocomplete="username" placeholder="admin@email.com" required />
+        <label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Password akun admin" required />
+        <button class="button primary full" type="submit">Masuk ke dashboard ↗</button>
+        <p id="login-message" class="form-message"></p>
+      </form>
+      <a class="back-link" href="/nexora/">← Kembali ke beranda</a>
+    </section>
+  </main>
+  <script>
+    import { supabase } from '../../lib/supabase.js';
+    const form = document.querySelector('#login-form');
+    const message = document.querySelector('#login-message');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!supabase) { message.textContent = 'Konfigurasi Supabase belum diisi.'; return; }
+      message.textContent = 'Memeriksa akun...';
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: document.querySelector('#email').value,
+        password: document.querySelector('#password').value
+      });
+      if (error) { message.textContent = error.message; return; }
+      const { data: profile, error: profileError } = await supabase.from('profiles').select('role').eq('id', data.user.id).single();
+      if (profileError || profile?.role !== 'admin') {
+        await supabase.auth.signOut();
+        message.textContent = 'Akun ini tidak memiliki akses admin.';
+        return;
+      }
+      message.textContent = 'Login berhasil. Dashboard admin akan dibangun pada tahap berikutnya.';
+    });
+  </script>
+</BaseLayout>
