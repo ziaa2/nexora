@@ -1,43 +1,117 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import Header from '../../components/Header.astro';
 ---
-<BaseLayout title="Admin Login — NEXORA">
-  <Header />
-  <main class="admin-wrap">
-    <section class="admin-card">
-      <span class="eyebrow">NEXORA CONTROL CENTER</span>
-      <h1>Admin <em>Sign in.</em></h1>
-      <p class="muted">Masuk untuk mengelola database NEXORA.</p>
-      <form id="login-form">
-        <label>Email</label><input id="email" type="email" autocomplete="username" placeholder="admin@email.com" required />
-        <label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Password akun admin" required />
-        <button class="button primary full" type="submit">Masuk ke dashboard ↗</button>
-        <p id="login-message" class="form-message"></p>
-      </form>
-      <a class="back-link" href="/nexora/">← Kembali ke beranda</a>
+<BaseLayout title="NEXORA Admin — Control Center">
+  <main class="admin-shell">
+    <section id="login-view" class="login-screen">
+      <div class="login-card">
+        <div class="brand-mark">N<span>X</span></div>
+        <p class="eyebrow">NEXORA CONTROL CENTER</p>
+        <h1>Welcome <em>back.</em></h1>
+        <p class="muted">Masuk untuk mengelola ensiklopedia anime NEXORA.</p>
+        <form id="login-form">
+          <label for="email">Email admin</label><input id="email" type="email" autocomplete="username" placeholder="admin@email.com" required />
+          <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Password" required />
+          <button class="primary-btn" type="submit">Masuk ke dashboard <span>↗</span></button>
+          <p id="login-message" class="message" aria-live="polite"></p>
+        </form>
+        <a class="back-link" href="/nexora/">← Kembali ke NEXORA</a>
+      </div>
+    </section>
+
+    <section id="dashboard-view" class="dashboard" hidden>
+      <aside class="sidebar">
+        <a class="side-brand" href="/nexora/"><span class="brand-mark small">N<span>X</span></span><span>NEXORA<small>ADMIN STUDIO</small></span></a>
+        <p class="side-label">WORKSPACE</p>
+        <button class="nav-item active" data-page="overview">◫ <span>Overview</span></button>
+        <p class="side-label">DATABASE</p>
+        <div id="nav-database"></div>
+        <p class="side-label">TOOLS</p>
+        <button class="nav-item" data-page="media">▧ <span>Media Library</span></button>
+        <button class="nav-item" data-page="settings">⚙ <span>Settings</span></button>
+        <div class="side-bottom"><span class="online-dot"></span> Supabase connected<button id="logout-btn">Keluar ↗</button></div>
+      </aside>
+      <section class="main-panel">
+        <header class="topbar"><div><p class="eyebrow">NEXORA / ADMIN</p><h1 id="page-title">Overview</h1></div><div class="top-user"><span class="avatar">A</span><span>Administrator<small>Admin access</small></span></div></header>
+        <div id="page-content" class="page-content"><div class="loading">Memuat dashboard...</div></div>
+      </section>
     </section>
   </main>
   <script>
     import { supabase } from '../../lib/supabase.js';
-    const form = document.querySelector('#login-form');
-    const message = document.querySelector('#login-message');
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (!supabase) { message.textContent = 'Konfigurasi Supabase belum diisi.'; return; }
-      message.textContent = 'Memeriksa akun...';
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: document.querySelector('#email').value,
-        password: document.querySelector('#password').value
-      });
-      if (error) { message.textContent = error.message; return; }
-      const { data: profile, error: profileError } = await supabase.from('profiles').select('role').eq('id', data.user.id).single();
-      if (profileError || profile?.role !== 'admin') {
-        await supabase.auth.signOut();
-        message.textContent = 'Akun ini tidak memiliki akses admin.';
-        return;
-      }
-      message.textContent = 'Login berhasil. Dashboard admin akan dibangun pada tahap berikutnya.';
+
+    const $ = (s) => document.querySelector(s);
+    const loginView = $('#login-view'), dashboardView = $('#dashboard-view');
+    const pageContent = $('#page-content');
+    const modules = [
+      {key:'anime',label:'Anime',icon:'◈',table:'anime',fields:['title','slug','synopsis','image_url','type','release_year','publication_status']},
+      {key:'characters',label:'Characters',icon:'✧',table:'characters',fields:['name','slug','description','image_url','gender','birth_date','publication_status']},
+      {key:'organizations',label:'Organizations',icon:'⌘',table:'organizations',fields:['name','slug','description','image_url','publication_status']},
+      {key:'clans',label:'Clans',icon:'◇',table:'clans',fields:['name','slug','description','image_url','publication_status']},
+      {key:'teams',label:'Teams',icon:'♧',table:'teams',fields:['name','slug','description','image_url','publication_status']},
+      {key:'abilities',label:'Abilities',icon:'✦',table:'abilities',fields:['name','slug','description','image_url','publication_status']},
+      {key:'locations',label:'Locations',icon:'⌖',table:'locations',fields:['name','slug','description','image_url','publication_status']},
+      {key:'articles',label:'Lore & Articles',icon:'▤',table:'articles',fields:['title','slug','content','cover_image','publication_status']}
+    ];
+    let activeModule = null, records = [], editing = null;
+    const esc = (v='') => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const notify = (msg, bad=false) => { const el=$('#toast'); if(el){el.textContent=msg;el.className='toast show'+(bad?' error':'');setTimeout(()=>el.className='toast',3200);} };
+    function showDashboard(){ loginView.hidden=true; dashboardView.hidden=false; renderOverview(); }
+    async function verifyAdmin(){
+      const {data:{session}} = await supabase.auth.getSession();
+      if(!session) return;
+      const {data:profile} = await supabase.from('profiles').select('role').eq('id',session.user.id).maybeSingle();
+      if(profile?.role==='admin') showDashboard(); else await supabase.auth.signOut();
+    }
+    $('#login-form').addEventListener('submit', async e=>{
+      e.preventDefault(); const msg=$('#login-message'); msg.textContent='Memeriksa akun...';
+      const {data,error}=await supabase.auth.signInWithPassword({email:$('#email').value.trim(),password:$('#password').value});
+      if(error){msg.textContent=error.message;return;}
+      const {data:profile,error:pe}=await supabase.from('profiles').select('role').eq('id',data.user.id).maybeSingle();
+      if(pe||profile?.role!=='admin'){await supabase.auth.signOut();msg.textContent='Akun ini belum memiliki role admin.';return;}
+      msg.textContent='Login berhasil.'; showDashboard();
     });
+    $('#logout-btn').addEventListener('click',async()=>{await supabase.auth.signOut();location.reload();});
+    $('#nav-database').innerHTML=modules.map(m=>`<button class="nav-item" data-module="${m.key}">${m.icon} <span>${m.label}</span></button>`).join('');
+    document.addEventListener('click',e=>{
+      const nav=e.target.closest('[data-page]'); if(nav){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));nav.classList.add('active'); if(nav.dataset.page==='overview')renderOverview();if(nav.dataset.page==='media')renderMedia();if(nav.dataset.page==='settings')renderSettings();}
+      const mod=e.target.closest('[data-module]'); if(mod){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));mod.classList.add('active');activeModule=modules.find(m=>m.key===mod.dataset.module);loadModule();}
+      if(e.target.closest('#add-record')) openEditor();
+      const edit=e.target.closest('[data-edit]');if(edit)openEditor(records.find(r=>String(r.id)===edit.dataset.edit));
+      const del=e.target.closest('[data-delete]');if(del)deleteRecord(del.dataset.delete);
+      if(e.target.closest('#cancel-editor'))closeEditor();
+    });
+    async function renderOverview(){
+      $('#page-title').textContent='Overview'; pageContent.innerHTML=`<div class="welcome"><div><p class="eyebrow">YOUR UNIVERSE, YOUR RULES</p><h2>Bangun ensiklopedia<br/><em>yang hidup.</em></h2><p>Kelola seluruh data anime dan karakter NEXORA dari satu tempat.</p></div><div class="welcome-orb">N<span>X</span></div></div><div class="stat-grid" id="stats"><div class="stat-card">Memuat statistik...</div></div><div class="quick-panel"><div><p class="eyebrow">QUICK ACTION</p><h3>Mulai mengelola database</h3><p>Pilih modul di sidebar untuk menambah, mengedit, atau menghapus konten.</p></div><span class="quick-symbol">✦</span></div>`;
+      const results=await Promise.all(['anime','characters','organizations','clans','teams','abilities','locations','articles'].map(t=>supabase.from(t).select('*',{count:'exact',head:true})));
+      $('#stats').innerHTML=modules.map((m,i)=>`<div class="stat-card"><span>${m.icon} ${m.label}</span><strong>${results[i].count ?? '—'}</strong><small>${results[i].error?'Tidak dapat dimuat':'Total record'}</small></div>`).join('');
+    }
+    async function loadModule(){
+      $('#page-title').textContent=activeModule.label; pageContent.innerHTML='<div class="loading">Mengambil data dari Supabase...</div>';
+      const {data,error}=await supabase.from(activeModule.table).select('*').order('created_at',{ascending:false}).limit(100);
+      if(error){pageContent.innerHTML=`<div class="error-panel"><h3>Data belum bisa dimuat</h3><p>${esc(error.message)}</p><small>Pastikan nama tabel dan kebijakan RLS sudah benar.</small></div>`;return;}
+      records=data||[]; renderTable();
+    }
+    function renderTable(){
+      const m=activeModule; pageContent.innerHTML=`<div class="section-head"><div><p class="eyebrow">DATABASE MANAGER</p><h2>${m.label}</h2><p>Menampilkan maksimal 100 data terbaru dari tabel <code>${m.table}</code>.</p></div><button id="add-record" class="primary-btn compact">＋ Tambah ${m.label}</button></div><div class="table-card"><div class="table-toolbar"><input id="table-search" placeholder="Cari data..."/><span>${records.length} record ditampilkan</span></div><div class="table-scroll"><table><thead><tr><th>Nama / Judul</th><th>Slug</th><th>Status</th><th>Aksi</th></tr></thead><tbody id="record-rows">${rowsHtml(records)}</tbody></table></div></div><div id="editor-host"></div><div id="toast" class="toast"></div>`;
+      $('#table-search').addEventListener('input',e=>{const q=e.target.value.toLowerCase();$('#record-rows').innerHTML=rowsHtml(records.filter(r=>JSON.stringify(r).toLowerCase().includes(q)));});
+    }
+    function rowsHtml(list){return list.map(r=>{const name=r.title||r.name||r.slug||'Tanpa nama';return `<tr><td><strong>${esc(name)}</strong><small>${esc(r.id||'')}</small></td><td>${esc(r.slug||'—')}</td><td><span class="status ${r.publication_status==='published'?'published':''}">${esc(r.publication_status||'draft / belum diatur')}</span></td><td><button class="mini-btn" data-edit="${esc(r.id)}">Edit</button> <button class="mini-btn danger" data-delete="${esc(r.id)}">Hapus</button></td></tr>`;}).join('')||'<tr><td colspan="4" class="empty">Belum ada data. Tambahkan record pertama.</td></tr>';}
+    function openEditor(record=null){editing=record;const initial=record?JSON.stringify(record,null,2):JSON.stringify({[activeModule.fields[0]]:'',[activeModule.fields[1]]:'',publication_status:'draft'},null,2);$('#editor-host').innerHTML=`<div class="editor-backdrop"><div class="editor-card"><div class="editor-head"><div><p class="eyebrow">${record?'EDIT RECORD':'NEW RECORD'}</p><h3>${record?'Ubah':'Tambah'} ${activeModule.label}</h3></div><button id="cancel-editor" class="close-btn">×</button></div><p class="editor-help">Isi data dalam format JSON. Kolom yang tidak diperlukan boleh dihapus. Untuk edit, jangan ubah nilai <code>id</code>.</p><textarea id="record-json" spellcheck="false">${esc(initial)}</textarea><div class="editor-actions"><button id="cancel-editor" class="secondary-btn">Batal</button><button id="save-record" class="primary-btn compact">Simpan data</button></div><p id="editor-message" class="message"></p></div></div>`;
+      $('#save-record').addEventListener('click',saveRecord);
+    }
+    function closeEditor(){const host=$('#editor-host');if(host)host.innerHTML='';editing=null;}
+    async function saveRecord(){const msg=$('#editor-message');let payload;try{payload=JSON.parse($('#record-json').value);}catch(e){msg.textContent='Format JSON tidak valid.';return;}delete payload.created_at;delete payload.updated_at;
+      msg.textContent='Menyimpan...';let result;
+      if(editing){delete payload.id;result=await supabase.from(activeModule.table).update(payload).eq('id',editing.id);}else{delete payload.id;result=await supabase.from(activeModule.table).insert(payload);}
+      if(result.error){msg.textContent=result.error.message;return;}closeEditor();notify('Data berhasil disimpan.');await loadModule();
+    }
+    async function deleteRecord(id){if(!confirm('Yakin ingin menghapus data ini? Tindakan ini tidak bisa dibatalkan.'))return;const {error}=await supabase.from(activeModule.table).delete().eq('id',id);if(error){notify(error.message,true);return;}notify('Data berhasil dihapus.');await loadModule();}
+    function renderMedia(){ $('#page-title').textContent='Media Library';pageContent.innerHTML=`<div class="section-head"><div><p class="eyebrow">SUPABASE STORAGE</p><h2>Media Library</h2><p>Upload artwork ke bucket <code>nexora-media</code>.</p></div></div><div class="upload-card"><div class="upload-icon">▧</div><h3>Upload artwork</h3><p>Pilih gambar JPG, PNG, atau WebP. File akan disimpan di bucket publik NEXORA.</p><input id="media-file" type="file" accept="image/png,image/jpeg,image/webp"/><button id="upload-media" class="primary-btn compact">Upload gambar</button><p id="upload-message" class="message"></p><div id="uploaded-url"></div></div><div id="toast" class="toast"></div>`;$('#upload-media').addEventListener('click',async()=>{const file=$('#media-file').files[0],msg=$('#upload-message');if(!file){msg.textContent='Pilih gambar terlebih dahulu.';return;}if(file.size>8*1024*1024){msg.textContent='Ukuran maksimal 8 MB.';return;}msg.textContent='Mengupload...';const path=`${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'-')}`;const {error}=await supabase.storage.from('nexora-media').upload(path,file,{upsert:false,contentType:file.type});if(error){msg.textContent=error.message;return;}const {data}=supabase.storage.from('nexora-media').getPublicUrl(path);msg.textContent='Upload berhasil!';$('#uploaded-url').innerHTML=`<label>URL gambar</label><div class="url-copy"><input readonly value="${esc(data.publicUrl)}"/><button id="copy-url" class="secondary-btn">Salin</button></div>`;$('#copy-url').addEventListener('click',()=>navigator.clipboard.writeText(data.publicUrl));}); }
+    function renderSettings(){ $('#page-title').textContent='Settings';pageContent.innerHTML=`<div class="section-head"><div><p class="eyebrow">SYSTEM</p><h2>Settings</h2><p>Informasi koneksi dan akun admin.</p></div></div><div class="settings-card"><div class="setting-row"><span>Status koneksi Supabase</span><b class="status published">Terhubung</b></div><div class="setting-row"><span>Project URL</span><code>${location.origin}/nexora</code></div><div class="setting-row"><span>Storage bucket</span><code>nexora-media</code></div><div class="setting-row"><span>Hak akses</span><b>Administrator</b></div><p class="muted">Pengaturan lanjutan akan ditambahkan pada tahap berikutnya.</p></div>`; }
+    verifyAdmin();
   </script>
+  <style>
+    :global(body){background:#080b16!important;color:#edf0ff}:global(.admin-shell){min-height:100vh;background:radial-gradient(ellipse at 75% 0%,#19153a 0,transparent 38%),#080b16;font-family:Inter,system-ui,sans-serif}:global([hidden]){display:none!important}.login-screen{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(100%,430px);padding:38px;border:1px solid #282b46;border-radius:24px;background:#101426;box-shadow:0 24px 90px #0008}.brand-mark{font-size:28px;font-weight:900;letter-spacing:-3px;color:#fff;margin-bottom:28px}.brand-mark span{color:#9b82ff}.eyebrow{font-size:10px;letter-spacing:2px;color:#9b87ff;font-weight:800}.login-card h1{font-size:38px;margin:10px 0}.login-card h1 em,.welcome h2 em{color:#a28aff;font-style:normal}.muted,.login-card>p{color:#939bb8;line-height:1.6}.login-card label,.editor-card label,.upload-card label{display:block;color:#c6cbe0;font-size:12px;margin:18px 0 8px}.login-card input,.table-toolbar input,.url-copy input{width:100%;background:#090e1e;border:1px solid #303650;border-radius:10px;padding:14px;color:#fff;outline:none}.login-card input:focus,.table-toolbar input:focus{border-color:#9b82ff}.primary-btn,.secondary-btn,.mini-btn,.close-btn{border:0;border-radius:10px;padding:12px 16px;cursor:pointer;font-weight:750}.primary-btn{background:linear-gradient(110deg,#7859e8,#a17bff);color:white;width:100%;margin-top:22px}.primary-btn span{float:right}.primary-btn.compact{width:auto;margin:0}.secondary-btn{background:#252a40;color:#dce0f5}.back-link{display:inline-block;color:#9c91d6;margin-top:24px;font-size:13px;text-decoration:none}.message{font-size:12px;color:#ff9caa;min-height:18px}.dashboard{display:grid;grid-template-columns:245px minmax(0,1fr);min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;padding:25px 16px;background:#0d1120;border-right:1px solid #242941;display:flex;flex-direction:column}.side-brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font-weight:900;letter-spacing:1px;padding:0 10px 32px}.side-brand small{display:block;font-size:9px;color:#8c91aa;letter-spacing:2px;margin-top:3px}.brand-mark.small{font-size:23px;margin:0}.side-label{font-size:9px;color:#69718f;letter-spacing:1.8px;font-weight:800;padding:12px}.nav-item{display:flex;align-items:center;gap:12px;width:100%;border:0;background:transparent;color:#aeb5cf;text-align:left;padding:11px 13px;border-radius:9px;margin:2px 0;cursor:pointer;font-size:13px}.nav-item.active,.nav-item:hover{background:#24203e;color:#c6b6ff}.side-bottom{margin-top:auto;color:#9ca3bc;font-size:11px;padding:15px 8px;border-top:1px solid #252a40}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#53d6a0;margin-right:7px}.side-bottom button{display:block;background:none;border:0;color:#ff9eae;margin-top:15px;padding:0;cursor:pointer}.main-panel{min-width:0}.topbar{height:88px;border-bottom:1px solid #242941;display:flex;align-items:center;justify-content:space-between;padding:0 38px}.topbar .eyebrow{margin:0 0 5px}.topbar h1{font-size:21px;margin:0}.top-user{display:flex;align-items:center;gap:10px;font-size:12px}.top-user small{display:block;color:#7f88a6;margin-top:4px}.avatar{width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:#302655;color:#c5b4ff;font-weight:800}.page-content{padding:30px 38px;max-width:1500px;margin:auto}.welcome{display:flex;justify-content:space-between;align-items:center;padding:34px 38px;border:1px solid #302b52;border-radius:20px;background:linear-gradient(115deg,#17182f,#211b42);overflow:hidden}.welcome h2{font-size:34px;line-height:1.15;margin:10px 0}.welcome p:not(.eyebrow){color:#a6abc2;max-width:500px}.welcome-orb{width:140px;height:140px;border-radius:50%;display:grid;place-items:center;font-size:46px;font-weight:900;color:#d7ccff;background:radial-gradient(circle at 35% 30%,#9b7aff,#35265f 65%,#18162d);box-shadow:0 0 70px #795ce766}.welcome-orb span{color:#fff}.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:22px 0}.stat-card,.quick-panel,.table-card,.upload-card,.settings-card{background:#111629;border:1px solid #252c45;border-radius:15px;padding:20px}.stat-card span{display:block;color:#a9b0cb;font-size:12px}.stat-card strong{display:block;font-size:30px;margin:12px 0 3px}.stat-card small{color:#77809d}.quick-panel{display:flex;justify-content:space-between;align-items:center}.quick-panel h3{margin:5px 0}.quick-panel p:last-child{color:#929ab6;font-size:13px}.quick-symbol{font-size:40px;color:#a48aff}.section-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}.section-head h2{font-size:27px;margin:5px 0}.section-head p:not(.eyebrow){color:#8f98b4;font-size:12px}.table-card{padding:0;overflow:hidden}.table-toolbar{padding:16px;display:flex;align-items:center;gap:18px;border-bottom:1px solid #252c45}.table-toolbar input{max-width:340px;padding:10px}.table-toolbar span{font-size:11px;color:#8992ad}.table-scroll{overflow:auto}table{width:100%;border-collapse:collapse;min-width:600px}th,td{text-align:left;padding:14px 16px;border-bottom:1px solid #252b40;font-size:12px}th{color:#8f98b4;font-size:10px;text-transform:uppercase;letter-spacing:1px}td strong{display:block;color:#e6e9fa}td small{display:block;color:#68728e;margin-top:4px;font-size:9px}.status{display:inline-block;padding:5px 8px;border-radius:30px;background:#332b27;color:#e6bb8a;font-size:10px}.status.published{background:#17372f;color:#75dbb0}.mini-btn{background:#272d45;color:#dce2ff;padding:7px 10px;font-size:10px}.mini-btn.danger{color:#ff9eae;background:#3a202d}.empty{text-align:center;color:#8b94b0;padding:35px}.editor-backdrop{position:fixed;inset:0;background:#02040bd9;display:grid;place-items:center;padding:18px;z-index:10}.editor-card{width:min(100%,700px);background:#12182b;border:1px solid #343957;border-radius:18px;padding:24px;box-shadow:0 25px 90px #000b}.editor-head{display:flex;justify-content:space-between;align-items:center}.editor-head h3{margin:4px 0}.close-btn{background:#292e46;color:white;font-size:22px;padding:4px 12px}.editor-help{font-size:12px;color:#9aa3bf;line-height:1.6}.editor-card textarea{width:100%;height:310px;resize:vertical;background:#080d1b;color:#d9e1ff;border:1px solid #343c59;border-radius:10px;padding:14px;font:12px/1.6 monospace}.editor-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:15px}.error-panel{padding:25px;border:1px solid #633748;background:#241521;border-radius:14px;color:#ffb2c0}.error-panel p{font-size:13px}.loading{padding:50px;text-align:center;color:#a49bbf}.upload-card{max-width:650px;text-align:center;padding:45px}.upload-icon{font-size:42px;color:#a48aff}.upload-card p{color:#969fba;font-size:13px}.upload-card input{display:block;margin:22px auto;color:#bbc2d9}.url-copy{display:flex;gap:8px;margin-top:15px}.url-copy input{min-width:0}.settings-card{max-width:700px}.setting-row{display:flex;justify-content:space-between;gap:20px;padding:17px 0;border-bottom:1px solid #293049;font-size:13px}.setting-row span{color:#a2abc5}.settings-card>.muted{font-size:12px;margin-top:20px}.toast{position:fixed;bottom:22px;right:22px;padding:12px 18px;border-radius:10px;background:#174b3a;color:#9cf0ca;opacity:0;pointer-events:none;transition:.2s;font-size:12px;z-index:20}.toast.show{opacity:1}.toast.error{background:#522536;color:#ffc0ce}@media(max-width:850px){.dashboard{grid-template-columns:1fr}.sidebar{position:relative;height:auto;padding:12px;display:block;border-right:0;border-bottom:1px solid #242941}.side-brand{padding:4px 8px 12px}.sidebar .side-label{display:none}#nav-database{display:flex;overflow:auto;gap:4px;margin:5px 0}.nav-item{width:auto;white-space:nowrap;padding:9px 11px;font-size:11px}.nav-item span{display:inline}.side-bottom{display:flex;align-items:center;gap:6px;padding:9px 8px}.side-bottom button{margin:0 0 0 auto}.topbar{padding:0 18px;height:72px}.page-content{padding:18px}.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.welcome{padding:24px}.welcome h2{font-size:27px}.welcome-orb{width:85px;height:85px;font-size:30px}}@media(max-width:480px){.login-card{padding:27px 22px}.top-user{font-size:0}.top-user small{display:none}.page-content{padding:14px}.section-head{align-items:flex-start;flex-direction:column}.welcome-orb{display:none}.welcome h2{font-size:25px}.stat-card{padding:15px}.stat-card strong{font-size:25px}.table-toolbar{align-items:stretch;flex-direction:column}.table-toolbar input{max-width:none}.setting-row{font-size:11px}}
+  </style>
 </BaseLayout>
