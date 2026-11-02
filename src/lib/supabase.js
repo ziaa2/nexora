@@ -1,8 +1,14 @@
+
 import { createClient } from '@supabase/supabase-js';
 
-const url = import.meta.env.PUBLIC_SUPABASE_URL;
-const key = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+const supabaseUrl = import.meta.env.PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = url && key
-  ? createClient(url, key)
-  : null;
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Konfigurasi Supabase belum ditemukan.');
+}
+
+export const supabase = createClient(
+  supabaseUrl.replace(/\/+$/, ''),
+  supabaseAnonKey
+);
