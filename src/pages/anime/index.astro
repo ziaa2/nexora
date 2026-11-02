@@ -1,0 +1,13 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import BottomNav from '../../components/BottomNav.astro';
+---
+<BaseLayout title="Anime Explorer — NEXORA">
+  <Header />
+  <main class="page-shell">
+    <span class="eyebrow">DATABASE DIRECTORY</span><h1>Anime <em>Explorer.</em></h1>
+    <p class="muted">Jelajahi seluruh anime yang terdaftar di NEXORA.</p>
+    <div class="empty-state"><span>◈</span><h2>Database sedang disiapkan</h2><p>Anime yang sudah dipublikasikan akan muncul di halaman ini.</p></div>
+  </main><BottomNav />
+</BaseLayout>
