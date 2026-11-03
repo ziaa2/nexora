@@ -39,6 +39,8 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
   <BottomNav />
 
   <script>
+    import { bindFav } from '../../../lib/nexora.js';
+
     // Kolom yang dipakai (sesuai skema tabel public.anime).
     const COLUMNS = 'id,slug,title,title_japanese,alternative_titles,synopsis,image_url,banner_url,image_source_url,image_credit,image_license,anime_type,airing_status,release_year,start_date,end_date,episodes,score,source,source_url';
 
@@ -140,7 +142,8 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
             ${has(a.title_japanese) ? `<p class="ad-jp" lang="ja">${esc(a.title_japanese)}</p>` : ''}
             <div class="ad-badges">${badges}${score ? `<span class="ad-score"><b>★</b> ${score}</span>` : ''}</div>
             ${extra.genres.length ? `<div class="ad-chips" aria-label="Genre">${chips(extra.genres)}</div>` : ''}
-            ${srcUrl ? `<a class="button ghost ad-ext" href="${esc(srcUrl)}" target="_blank" rel="noopener noreferrer">Lihat sumber data ↗</a>` : ''}
+            <div class="ad-actions"><button type="button" class="button ghost ad-fav" id="ad-fav"></button>
+            ${srcUrl ? `<a class="button ghost ad-ext" href="${esc(srcUrl)}" target="_blank" rel="noopener noreferrer">Lihat sumber data ↗</a>` : ''}</div>
           </div>
         </section>
 
@@ -160,6 +163,10 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
         ${credit.length || imgSrc ? `<p class="ad-credit">${credit.join(' · ')}${imgSrc ? `${credit.length ? ' · ' : ''}<a href="${esc(imgSrc)}" target="_blank" rel="noopener noreferrer">Sumber gambar ↗</a>` : ''}</p>` : ''}
       `;
+
+      const favBtn = els.content.querySelector('#ad-fav');
+      if (favBtn && a.slug) bindFav(favBtn, { type: 'anime', slug: a.slug, title, image, sub: [a.anime_type, a.release_year].filter(Boolean).join(' · ') });
+      else if (favBtn) favBtn.remove();
 
       // Poster/banner rusak: ganti dengan placeholder.
       const img = els.content.querySelector('.ad-poster img');
@@ -221,7 +228,8 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
     .ad-score b{color:#ffd166;font-weight:400}
     .ad-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
     .ad-chip{padding:6px 12px;border-radius:999px;font-size:12px;color:#d8d4ed;background:#191d2d;border:1px solid var(--line)}
-    .ad-ext{margin-top:4px}
+    .ad-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
+    .ad-fav.is-on{border-color:#8e78e7;background:#8b73ed2e;color:#fff}
     .ad-section{margin-top:44px}
     .ad-section h2{font:600 22px 'Space Grotesk';margin:0 0 14px}
     .ad-sub{font:600 12px 'Space Grotesk';letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px}
