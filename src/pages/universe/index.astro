@@ -1,24 +1,38 @@
 ---
-import BaseLayout from '../../../layouts/BaseLayout.astro';
-import Header from '../../../components/Header.astro';
-import BottomNav from '../../../components/BottomNav.astro';
-
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import BottomNav from '../../components/BottomNav.astro';
+import { ENTITY } from '../../lib/nexora.js';
 // Base path Astro ("/nexora"), tanpa trailing slash.
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 ---
-<BaseLayout title="Detail Universe — NEXORA" description="Detail organisasi, klan, tim, kemampuan, dan lokasi di NEXORA.">
+<BaseLayout title="Universe Explorer — NEXORA" description="Jelajahi organisasi, klan, tim, kemampuan, dan lokasi dari dunia anime.">
   <Header />
   <main class="page-shell nx-shell">
+    <span class="eyebrow">UNIVERSE EXPLORER</span><h1>Universe <em>Explorer.</em></h1>
+    <p class="muted">Jelajahi organisasi, klan, tim, kemampuan, dan lokasi dari dunia anime.</p>
+
     <div id="nx-root" data-base={base}>
-      <a class="nx-back" id="nx-back" href={`${base}/universe/`}>← Kembali ke Universe Explorer</a>
-      <div id="nx-loading" class="nx-hero" aria-busy="true" aria-label="Memuat">
-        <div class="nx-photo nx-skel"></div>
-        <div class="nx-main"><i class="nx-sk nx-sk-lg"></i><i class="nx-sk nx-sk-sm"></i><i class="nx-sk"></i><i class="nx-sk"></i><i class="nx-sk nx-sk-md"></i></div>
+      <div class="nx-tabs" role="tablist" aria-label="Kategori universe">
+        {Object.entries(ENTITY).map(([key, e]) => (
+          <button type="button" class="nx-tab" role="tab" data-type={key} aria-selected="false">{e.icon} {e.label}</button>
+        ))}
       </div>
-      <article id="nx-content" hidden></article>
-      <div id="nx-notfound" class="empty-state" hidden>
-        <span>◈</span><h2>Data tidak ditemukan</h2><p>Data ini belum dipublikasikan, sudah dihapus, atau tautannya tidak valid.</p>
-        <a class="button ghost nx-btn" id="nx-nf-back" href={`${base}/universe/`}>Buka Universe Explorer</a>
+
+      <form class="nx-toolbar" role="search" autocomplete="off" onsubmit="return false">
+        <label class="nx-field" for="nx-q">
+          <span class="nx-icon" aria-hidden="true">⌕</span>
+          <input id="nx-q" type="search" placeholder="Cari nama..." maxlength="120" disabled />
+        </label>
+      </form>
+
+      <div class="nx-meta"><span id="nx-count" aria-live="polite">Memuat data…</span><button type="button" id="nx-reset" class="nx-link" hidden>Reset pencarian</button></div>
+
+      <div id="nx-grid" class="nx-grid" aria-busy="true"></div>
+
+      <div id="nx-empty" class="empty-state" hidden>
+        <span id="nx-empty-icon">◈</span><h2 id="nx-empty-title">Belum ada data</h2><p id="nx-empty-text"></p>
+        <button type="button" id="nx-empty-reset" class="button ghost nx-btn" hidden>Reset pencarian</button>
       </div>
       <div id="nx-error" class="empty-state" hidden role="alert">
         <span>!</span><h2>Gagal memuat data</h2>
@@ -30,78 +44,92 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
   <BottomNav />
 
   <script>
-    import { esc, has, safeUrl, visible, genderLabel, ENTITY, makeUrls, soft, bindFav } from '../../../lib/nexora.js';
+    import { esc, has, safeUrl, snippet, ENTITY, makeUrls, fetchPublished } from '../../lib/nexora.js';
 
     const root = document.querySelector('#nx-root');
-    const BASE = (root.dataset.base || '').replace(/\/+$/, '');
-    const urls = makeUrls(BASE);
+    const urls = makeUrls(root.dataset.base);
     const $ = (s) => root.querySelector(s);
-    const els = { loading: $('#nx-loading'), content: $('#nx-content'), notfound: $('#nx-notfound'), error: $('#nx-error'), retry: $('#nx-retry') };
-    function show(view) {
-      els.loading.hidden = view !== 'loading';
-      els.content.hidden = view !== 'content';
-      els.notfound.hidden = view !== 'notfound';
-      els.error.hidden = view !== 'error';
-    }
-    const imgFallback = (container, glyph) => container.querySelectorAll('img').forEach((img) => img.addEventListener('error', () => {
-      const ph = document.createElement('span'); ph.className = 'nx-ph'; ph.setAttribute('aria-hidden', 'true'); ph.textContent = glyph; img.replaceWith(ph);
-    }));
-    const chipsHtml = (list) => list.map((n) => `<span class="nx-chip">${esc(n)}</span>`).join('');
-
+    const els = { grid: $('#nx-grid'), q: $('#nx-q'), count: $('#nx-count'), reset: $('#nx-reset'), empty: $('#nx-empty'), emptyIcon: $('#nx-empty-icon'), emptyTitle: $('#nx-empty-title'), emptyText: $('#nx-empty-text'), emptyReset: $('#nx-empty-reset'), error: $('#nx-error'), retry: $('#nx-retry') };
+    const tabs = [...root.querySelectorAll('.nx-tab')];
     const COLUMNS = 'id,slug,name,description,image_url';
+    const params = new URLSearchParams(location.search);
+    const state = { type: ENTITY[params.get('type')] ? params.get('type') : 'organizations', q: params.get('q') || '', cache: {}, req: 0 };
+
+    const skeletons = () => Array.from({ length: 8 }, () => '<div class="nx-card nx-skel" aria-hidden="true"><div class="nx-poster nx-wide"></div><div class="nx-info"><i></i><i></i></div></div>').join('');
+    function show(view) {
+      els.grid.hidden = view !== 'grid' && view !== 'loading';
+      els.empty.hidden = view !== 'empty';
+      els.error.hidden = view !== 'error';
+      els.grid.setAttribute('aria-busy', view === 'loading' ? 'true' : 'false');
+    }
+
+    function cardHtml(r) {
+      const meta = ENTITY[state.type];
+      const img = safeUrl(r.image_url);
+      const inner = `<div class="nx-poster nx-wide">${img ? `<img src="${esc(img)}" alt="" loading="lazy" decoding="async" />` : `<span class="nx-ph" aria-hidden="true">${meta.icon}</span>`}<span class="nx-badge">${esc(meta.label)}</span></div>
+        <div class="nx-info"><h3>${esc(r.name || 'Tanpa nama')}</h3>${has(r.description) ? `<p>${esc(snippet(r.description, 110))}</p>` : ''}</div>`;
+      return has(r.slug) ? `<a class="nx-card" href="${esc(urls.entity(state.type, r.slug))}" aria-label="${esc(r.name)}">${inner}</a>` : `<div class="nx-card">${inner}</div>`;
+    }
+
+    function render() {
+      const meta = ENTITY[state.type];
+      const all = state.cache[state.type] || [];
+      const needle = state.q.trim().toLowerCase();
+      const list = needle ? all.filter((r) => (r.name || '').toLowerCase().includes(needle)) : all;
+      els.reset.hidden = !needle;
+      els.count.textContent = needle ? `${list.length} dari ${all.length} ${meta.label.toLowerCase()}` : `${all.length} ${meta.label.toLowerCase()}`;
+      if (!list.length) {
+        els.emptyIcon.textContent = meta.icon;
+        els.emptyTitle.textContent = all.length ? 'Tidak ada hasil' : `Belum ada ${meta.label.toLowerCase()}`;
+        els.emptyText.textContent = all.length ? 'Tidak ada data yang cocok dengan pencarian.' : `${meta.label} yang sudah dipublikasikan akan muncul di halaman ini.`;
+        els.emptyReset.hidden = !all.length;
+        show('empty');
+        return;
+      }
+      els.grid.innerHTML = list.map(cardHtml).join('');
+      show('grid');
+    }
+
+    function syncUrl() {
+      const p = new URLSearchParams();
+      p.set('type', state.type);
+      if (state.q.trim()) p.set('q', state.q.trim());
+      history.replaceState(null, '', location.pathname + '?' + p.toString());
+    }
 
     async function load() {
-      const p = new URLSearchParams(location.search);
-      const type = p.get('type') || '', slug = (p.get('slug') || '').trim();
-      if (!ENTITY[type] || !slug) { show('notfound'); return; }
-      const meta = ENTITY[type];
-      $('#nx-back').href = `${BASE}/universe/?type=${encodeURIComponent(type)}`;
-      $('#nx-nf-back').href = $('#nx-back').href;
+      const type = state.type, req = ++state.req;
+      tabs.forEach((t) => t.setAttribute('aria-selected', t.dataset.type === type ? 'true' : 'false'));
+      els.q.placeholder = `Cari ${ENTITY[type].label.toLowerCase()}...`;
+      if (state.cache[type]) { els.q.disabled = false; render(); return; }
+      els.q.disabled = true; els.reset.hidden = true;
+      els.count.textContent = 'Memuat data…';
+      els.grid.innerHTML = skeletons();
       show('loading');
       try {
-        const { supabase } = await import('../../../lib/supabase.js');
-        const { data, error } = await supabase.from(type).select(COLUMNS).eq('slug', slug).eq('publication_status', 'published').maybeSingle();
-        if (error) throw error;
-        if (!data) { show('notfound'); return; }
-
-        // Karakter terkait: opsional, gagal = bagian disembunyikan.
-        const rows = await soft(meta.junction, () => supabase.from(meta.junction).select('*, characters(name,slug,image_url,gender,publication_status)').eq(meta.fk, data.id));
-        const seen = new Set();
-        const people = rows.map((r) => r.characters).filter((c) => visible(c) && has(c?.slug) && has(c?.name)).filter((c) => !seen.has(c.slug) && seen.add(c.slug));
-        render(data, type, people);
+        const { supabase } = await import('../../lib/supabase.js');
+        const rows = await fetchPublished(supabase, type, COLUMNS, 'name');
+        if (req !== state.req) return; // tab sudah berganti
+        state.cache[type] = rows;
+        els.q.disabled = false;
+        render();
       } catch (err) {
-        console.error('[NEXORA] Gagal memuat detail universe:', err);
+        if (req !== state.req) return;
+        console.error('[NEXORA] Gagal memuat universe:', err);
+        els.count.textContent = 'Gagal memuat data';
         show('error');
       }
     }
 
-    function render(d, type, people) {
-      const meta = ENTITY[type];
-      const name = d.name || 'Tanpa nama';
-      document.title = `${name} — NEXORA`;
-      const img = safeUrl(d.image_url);
-      const peopleHtml = people.length ? `<section class="nx-section"><h2>Karakter terkait <small class="muted" style="font-size:13px">(${people.length})</small></h2><div class="nx-minis">${people.map((c) => {
-        const im = safeUrl(c.image_url);
-        return `<a class="nx-mini" href="${esc(urls.character(c.slug))}"><div class="nx-poster">${im ? `<img src="${esc(im)}" alt="" loading="lazy" />` : '<span class="nx-ph">♙</span>'}</div><b>${esc(c.name)}</b>${has(c.gender) ? `<small>${esc(genderLabel(c.gender))}</small>` : ''}</a>`;
-      }).join('')}</div></section>` : '';
+    function reset() { state.q = ''; els.q.value = ''; syncUrl(); render(); els.q.focus(); }
 
-      els.content.innerHTML = `
-        <section class="nx-hero">
-          <div class="nx-photo nx-sq">${img ? `<img src="${esc(img)}" alt="${esc(name)}" decoding="async" />` : `<span class="nx-ph" style="font-size:80px">${meta.icon}</span>`}</div>
-          <div class="nx-main">
-            <span class="eyebrow">${esc(meta.label.toUpperCase())}</span>
-            <h1 class="nx-title">${esc(name)}</h1>
-            <div class="nx-badges"><span class="nx-pill">${meta.icon} ${esc(meta.label)}</span></div>
-            <button type="button" class="button ghost nx-fav" id="nx-fav"></button>
-          </div>
-        </section>
-        <section class="nx-section"><h2>Deskripsi</h2>${has(d.description) ? `<p class="nx-text">${esc(d.description)}</p>` : '<p class="muted">Deskripsi belum tersedia.</p>'}</section>
-        ${peopleHtml}`;
-      imgFallback(els.content, meta.icon);
-      bindFav(els.content.querySelector('#nx-fav'), { type, slug: d.slug, title: name, image: img, sub: meta.label });
-      show('content');
-    }
+    tabs.forEach((t) => t.addEventListener('click', () => { if (state.type === t.dataset.type) return; state.type = t.dataset.type; syncUrl(); load(); }));
+    let timer;
+    els.q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { state.q = els.q.value; syncUrl(); render(); }, 150); });
+    els.reset.addEventListener('click', reset);
+    els.emptyReset.addEventListener('click', reset);
     els.retry.addEventListener('click', load);
+    els.q.value = state.q;
     load();
   </script>
 
