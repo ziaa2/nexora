@@ -1,249 +1,278 @@
 ---
-import BaseLayout from '../../../layouts/BaseLayout.astro';
-import Header from '../../../components/Header.astro';
-import BottomNav from '../../../components/BottomNav.astro';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import BottomNav from '../../components/BottomNav.astro';
 
 // Base path Astro ("/nexora"), tanpa trailing slash.
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 ---
-<BaseLayout title="Detail Karakter — NEXORA" description="Profil lengkap karakter di NEXORA.">
+<BaseLayout title="Character Database — NEXORA" description="Kenali profil, relasi, kemampuan, dan perjalanan setiap karakter.">
   <Header />
-  <main class="page-shell nx-shell">
-    <div id="nx-root" data-base={base}>
-      <a class="nx-back" id="nx-back" href={`${base}/characters/`}>← Kembali ke Character Database</a>
-      <div id="nx-loading" class="nx-hero" aria-busy="true" aria-label="Memuat">
-        <div class="nx-photo nx-skel"></div>
-        <div class="nx-main"><i class="nx-sk nx-sk-lg"></i><i class="nx-sk nx-sk-sm"></i><i class="nx-sk"></i><i class="nx-sk"></i><i class="nx-sk nx-sk-md"></i></div>
+  <main class="page-shell cx-shell">
+    <span class="eyebrow">CHARACTER DIRECTORY</span><h1>Character <em>Database.</em></h1>
+    <p class="muted">Kenali profil, relasi, kemampuan, dan perjalanan setiap karakter.</p>
+
+    <div id="cx-root" data-base={base}>
+      <form class="cx-toolbar" role="search" autocomplete="off" onsubmit="return false">
+        <label class="cx-field cx-search" for="cx-q">
+          <span class="cx-icon" aria-hidden="true">⌕</span>
+          <input id="cx-q" type="search" placeholder="Cari nama karakter..." maxlength="120" disabled />
+        </label>
+        <label class="cx-field cx-select" for="cx-gender">
+          <span class="cx-sr">Gender</span>
+          <select id="cx-gender" disabled><option value="">Semua gender</option></select>
+        </label>
+      </form>
+
+      <div class="cx-meta">
+        <span id="cx-count" aria-live="polite">Memuat data…</span>
+        <button type="button" id="cx-reset" class="cx-link" hidden>Reset filter</button>
       </div>
-      <article id="nx-content" hidden></article>
-      <div id="nx-notfound" class="empty-state" hidden>
-        <span>◈</span><h2>Karakter tidak ditemukan</h2><p>Karakter ini belum dipublikasikan, sudah dihapus, atau tautannya tidak valid.</p>
-        <a class="button ghost nx-btn" id="nx-nf-back" href={`${base}/characters/`}>Lihat semua karakter</a>
+
+      <div id="cx-grid" class="cx-grid" aria-busy="true">
+        {Array.from({ length: 8 }).map(() => (
+          <div class="cx-card cx-skel" aria-hidden="true"><div class="cx-poster"></div><div class="cx-info"><i></i><i></i></div></div>
+        ))}
       </div>
-      <div id="nx-error" class="empty-state" hidden role="alert">
-        <span>!</span><h2>Gagal memuat data</h2>
+
+      <div id="cx-empty" class="empty-state" hidden>
+        <span>♙</span>
+        <h2 id="cx-empty-title">Belum ada karakter</h2>
+        <p id="cx-empty-text">Karakter yang sudah dipublikasikan akan muncul di halaman ini.</p>
+        <button type="button" id="cx-empty-reset" class="button ghost cx-btn" hidden>Reset filter</button>
+      </div>
+
+      <div id="cx-error" class="empty-state" hidden role="alert">
+        <span>!</span>
+        <h2>Gagal memuat karakter</h2>
         <p>Terjadi masalah saat mengambil data dari database. Periksa koneksi internetmu lalu coba lagi.</p>
-        <button type="button" id="nx-retry" class="button primary nx-btn">Coba lagi</button>
+        <button type="button" id="cx-retry" class="button primary cx-btn">Coba lagi</button>
       </div>
     </div>
   </main>
   <BottomNav />
 
   <script>
-    import { esc, has, safeUrl, visible, genderLabel, fmtDate, ENTITY, makeUrls, soft, bindFav } from '../../../lib/nexora.js';
+    // Kolom yang dipakai (sesuai field karakter di dashboard admin).
+    const COLUMNS = 'id,slug,name,description,image_url,gender';
+    const PAGE_SIZE = 1000;
 
-    const root = document.querySelector('#nx-root');
-    const BASE = (root.dataset.base || '').replace(/\/+$/, '');
-    const urls = makeUrls(BASE);
+    const root = document.querySelector('#cx-root');
+    const base = (root.dataset.base || '').replace(/\/+$/, '');
+    // Halaman detail karakter dikerjakan di Tahap 4. Satu tempat untuk mengubah format URL-nya.
+    const detailUrl = (slug) => `${base}/characters/detail/?slug=${encodeURIComponent(slug)}`;
+
     const $ = (s) => root.querySelector(s);
-    const els = { loading: $('#nx-loading'), content: $('#nx-content'), notfound: $('#nx-notfound'), error: $('#nx-error'), retry: $('#nx-retry') };
+    const els = {
+      q: $('#cx-q'), gender: $('#cx-gender'),
+      grid: $('#cx-grid'), count: $('#cx-count'), reset: $('#cx-reset'),
+      empty: $('#cx-empty'), emptyTitle: $('#cx-empty-title'), emptyText: $('#cx-empty-text'), emptyReset: $('#cx-empty-reset'),
+      error: $('#cx-error'), retry: $('#cx-retry'),
+    };
+
+    const state = { all: [], q: '', gender: '' };
+
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const has = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+    const safeUrl = (u) => { try { const x = new URL(String(u)); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } };
+
+    const GENDER_ID = { male: 'Laki-laki', female: 'Perempuan', m: 'Laki-laki', f: 'Perempuan', unknown: 'Tidak diketahui', other: 'Lainnya', 'non-binary': 'Non-biner', nonbinary: 'Non-biner' };
+    const genderLabel = (g) => GENDER_ID[String(g).trim().toLowerCase()] || String(g).trim();
+
+    function skeletons() {
+      return Array.from({ length: 8 }, () => '<div class="cx-card cx-skel" aria-hidden="true"><div class="cx-poster"></div><div class="cx-info"><i></i><i></i></div></div>').join('');
+    }
+
     function show(view) {
-      els.loading.hidden = view !== 'loading';
-      els.content.hidden = view !== 'content';
-      els.notfound.hidden = view !== 'notfound';
+      els.grid.hidden = view !== 'grid' && view !== 'loading';
+      els.empty.hidden = view !== 'empty';
       els.error.hidden = view !== 'error';
+      els.grid.setAttribute('aria-busy', view === 'loading' ? 'true' : 'false');
     }
-    const imgFallback = (container, glyph) => container.querySelectorAll('img').forEach((img) => img.addEventListener('error', () => {
-      const ph = document.createElement('span'); ph.className = 'nx-ph'; ph.setAttribute('aria-hidden', 'true'); ph.textContent = glyph; img.replaceWith(ph);
-    }));
-    const chipsHtml = (list) => list.map((n) => `<span class="nx-chip">${esc(n)}</span>`).join('');
 
-    const COLUMNS = 'id,slug,name,description,image_url,gender,birth_date';
-    const ANIME_EMBED = '*, anime(slug,title,image_url,anime_type,release_year,publication_status)';
+    function setControlsDisabled(disabled) { els.q.disabled = els.gender.disabled = disabled; }
 
-    // Data pelengkap (alias, anime, afiliasi, relasi) bersifat opsional: gagal = bagian disembunyikan.
-    async function fetchExtras(supabase, c) {
-      const entityKeys = Object.keys(ENTITY);
-      const [aliases, animeRows, relRows, ...entityRows] = await Promise.all([
-        soft('character_aliases', () => supabase.from('character_aliases').select('*').eq('character_id', c.id)),
-        soft('anime_characters', () => supabase.from('anime_characters').select(ANIME_EMBED).eq('character_id', c.id)),
-        soft('character_relations', () => supabase.from('character_relations').select('*').eq('character_id', c.id)),
-        ...entityKeys.map((k) => soft(ENTITY[k].junction, () => supabase.from(ENTITY[k].junction).select(`*, ${k}(name,slug,publication_status)`).eq('character_id', c.id))),
-      ]);
-
-      const aliasNames = [...new Set(aliases.map((r) => r.alias ?? r.alias_name ?? r.name ?? r.title).filter(has).map((s) => String(s).trim()))].filter((s) => s !== c.name);
-      const anime = animeRows.filter((r) => visible(r.anime) && r.anime?.slug);
-
-      const entities = {};
-      entityKeys.forEach((k, i) => {
-        const items = entityRows[i].map((r) => r[k]).filter((x) => visible(x) && has(x?.slug) && has(x?.name));
-        const seen = new Set();
-        entities[k] = items.filter((x) => !seen.has(x.slug) && seen.add(x.slug));
-      });
-
-      // Relasi antar karakter: nama kolom tujuan bisa berbeda, jadi cari yang tersedia.
-      const targetOf = (r) => r.related_character_id ?? r.target_character_id ?? r.to_character_id ?? r.character_b_id ?? r.related_id ?? null;
-      const ids = [...new Set(relRows.map(targetOf).filter(has))];
-      let relations = [];
-      if (ids.length) {
-        const people = await soft('karakter terkait', () => supabase.from('characters').select('id,slug,name,publication_status').in('id', ids));
-        const byId = new Map(people.filter(visible).map((p) => [p.id, p]));
-        relations = relRows.map((r) => ({ who: byId.get(targetOf(r)), label: r.relation_type ?? r.relationship ?? r.relation ?? r.type ?? '' })).filter((r) => r.who?.slug);
+    async function fetchAllPublished() {
+      const { supabase } = await import('../../lib/supabase.js');
+      const rows = [];
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('characters')
+          .select(COLUMNS)
+          .eq('publication_status', 'published')
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < PAGE_SIZE) break;
       }
-      return { aliasNames, anime, entities, relations };
+      return rows;
     }
 
-    function render(c, x) {
+    function fillOptions() {
+      const genders = [...new Set(state.all.map((c) => c.gender).filter(has).map((g) => String(g).trim()))]
+        .sort((a, b) => genderLabel(a).localeCompare(genderLabel(b), 'id'));
+      els.gender.innerHTML = '<option value="">Semua gender</option>' + genders.map((g) => `<option value="${esc(g)}">${esc(genderLabel(g))}</option>`).join('');
+      if (genders.includes(state.gender)) els.gender.value = state.gender; else state.gender = '';
+    }
+
+    function cardHtml(c) {
       const name = c.name || 'Tanpa nama';
-      document.title = `${name} — NEXORA`;
       const img = safeUrl(c.image_url);
+      const poster = img
+        ? `<img src="${esc(img)}" alt="Potret ${esc(name)}" loading="lazy" decoding="async" />`
+        : '<span class="cx-ph" aria-hidden="true">♙</span>';
       const g = has(c.gender) ? genderLabel(c.gender) : '';
-      const facts = [['Gender', g], ['Tanggal lahir', fmtDate(c.birth_date)]].filter(([, v]) => has(v));
+      const inner = `
+        <div class="cx-poster">${poster}${g ? `<span class="cx-badge">${esc(g)}</span>` : ''}</div>
+        <div class="cx-info"><h3>${esc(name)}</h3>${has(c.description) ? `<p>${esc(c.description)}</p>` : ''}</div>`;
+      return has(c.slug)
+        ? `<a class="cx-card" href="${esc(detailUrl(c.slug))}" aria-label="${esc(name)}">${inner}</a>`
+        : `<div class="cx-card cx-static">${inner}</div>`;
+    }
 
-      const animeHtml = x.anime.length ? `<section class="nx-section"><h2>Muncul di anime</h2><div class="nx-minis">${x.anime.map((r) => {
-        const a = r.anime; const im = safeUrl(a.image_url);
-        const role = r.role ?? r.role_type ?? '';
-        const sub = [role, a.anime_type, a.release_year].filter(has).map(esc).join(' · ');
-        return `<a class="nx-mini" href="${esc(urls.anime(a.slug))}"><div class="nx-poster">${im ? `<img src="${esc(im)}" alt="" loading="lazy" />` : '<span class="nx-ph">N</span>'}</div><b>${esc(a.title)}</b>${sub ? `<small>${sub}</small>` : ''}</a>`;
-      }).join('')}</div></section>` : '';
+    function filtered() {
+      const needle = state.q.trim().toLowerCase();
+      return state.all.filter((c) =>
+        (!state.gender || String(c.gender || '').trim() === state.gender) &&
+        (!needle || (c.name || '').toLowerCase().includes(needle))
+      );
+    }
 
-      const groups = Object.keys(ENTITY).filter((k) => x.entities[k].length).map((k) =>
-        `<h3 class="nx-subh">${esc(ENTITY[k].label)}</h3><div class="nx-chips">${x.entities[k].map((e) => `<a class="nx-chip" href="${esc(urls.entity(k, e.slug))}">${esc(e.name)}</a>`).join('')}</div>`).join('');
-      const worldHtml = groups ? `<section class="nx-section"><h2>Afiliasi &amp; kemampuan</h2>${groups}</section>` : '';
+    function render() {
+      const hasFilter = Boolean(state.q.trim() || state.gender);
+      els.reset.hidden = !hasFilter;
 
-      const relHtml = x.relations.length ? `<section class="nx-section"><h2>Relasi karakter</h2><ul class="nx-rel">${x.relations.map((r) =>
-        `<li><a href="${esc(urls.character(r.who.slug))}">${esc(r.who.name)}</a>${has(r.label) ? `<span>${esc(r.label)}</span>` : ''}</li>`).join('')}</ul></section>` : '';
+      if (!state.all.length) {
+        els.count.textContent = '0 karakter';
+        els.emptyTitle.textContent = 'Belum ada karakter';
+        els.emptyText.textContent = 'Karakter yang sudah dipublikasikan akan muncul di halaman ini.';
+        els.emptyReset.hidden = true;
+        show('empty');
+        return;
+      }
 
-      els.content.innerHTML = `
-        <section class="nx-hero">
-          <div class="nx-photo">${img ? `<img src="${esc(img)}" alt="Potret ${esc(name)}" decoding="async" />` : '<span class="nx-ph" style="font-size:80px">♙</span>'}</div>
-          <div class="nx-main">
-            <span class="eyebrow">KARAKTER</span>
-            <h1 class="nx-title">${esc(name)}</h1>
-            ${x.aliasNames.length ? `<p class="nx-sub">Juga dikenal sebagai: ${x.aliasNames.slice(0, 8).map(esc).join(', ')}</p>` : ''}
-            <div class="nx-badges">${g ? `<span class="nx-pill">${esc(g)}</span>` : ''}</div>
-            <button type="button" class="button ghost nx-fav" id="nx-fav"></button>
-          </div>
-        </section>
-        <section class="nx-section"><h2>Profil</h2>${has(c.description) ? `<p class="nx-text">${esc(c.description)}</p>` : '<p class="muted">Deskripsi belum tersedia.</p>'}</section>
-        ${facts.length ? `<section class="nx-section"><h2>Biodata</h2><dl class="nx-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>` : ''}
-        ${animeHtml}${worldHtml}${relHtml}`;
-      imgFallback(els.content, '♙');
-      bindFav(els.content.querySelector('#nx-fav'), { type: 'character', slug: c.slug, title: name, image: img, sub: g });
-      show('content');
+      const list = filtered();
+      els.count.textContent = hasFilter ? `${list.length} dari ${state.all.length} karakter` : `${list.length} karakter`;
+
+      if (!list.length) {
+        els.emptyTitle.textContent = 'Tidak ada hasil';
+        els.emptyText.textContent = 'Tidak ada karakter yang cocok dengan pencarian atau filter yang dipilih.';
+        els.emptyReset.hidden = false;
+        show('empty');
+        return;
+      }
+
+      els.grid.innerHTML = list.map(cardHtml).join('');
+      show('grid');
+    }
+
+    function syncUrl() {
+      const p = new URLSearchParams();
+      if (state.q.trim()) p.set('q', state.q.trim());
+      if (state.gender) p.set('gender', state.gender);
+      const qs = p.toString();
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+    }
+
+    function update() { syncUrl(); render(); }
+
+    function resetFilters() {
+      state.q = state.gender = '';
+      els.q.value = ''; els.gender.value = '';
+      update();
+      els.q.focus();
     }
 
     async function load() {
-      const slug = (new URLSearchParams(location.search).get('slug') || '').trim();
-      if (!slug) { show('notfound'); return; }
+      setControlsDisabled(true);
+      els.count.textContent = 'Memuat data…';
+      els.reset.hidden = true;
+      els.grid.innerHTML = skeletons();
       show('loading');
       try {
-        const { supabase } = await import('../../../lib/supabase.js');
-        const { data, error } = await supabase.from('characters').select(COLUMNS).eq('slug', slug).eq('publication_status', 'published').maybeSingle();
-        if (error) throw error;
-        if (!data) { show('notfound'); return; }
-        render(data, await fetchExtras(supabase, data));
+        state.all = await fetchAllPublished();
+        fillOptions();
+        setControlsDisabled(false);
+        els.q.value = state.q;
+        render();
       } catch (err) {
         console.error('[NEXORA] Gagal memuat karakter:', err);
+        els.count.textContent = 'Gagal memuat data';
         show('error');
       }
     }
+
+    let timer;
+    els.q.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { state.q = els.q.value; update(); }, 150);
+    });
+    els.gender.addEventListener('change', () => { state.gender = els.gender.value; update(); });
+    els.reset.addEventListener('click', resetFilters);
+    els.emptyReset.addEventListener('click', resetFilters);
     els.retry.addEventListener('click', load);
+    // Error gambar tidak bubble, jadi pakai capture: ganti potret rusak dengan placeholder.
+    els.grid.addEventListener('error', (e) => {
+      const img = e.target;
+      if (img instanceof HTMLImageElement) {
+        const ph = document.createElement('span');
+        ph.className = 'cx-ph'; ph.setAttribute('aria-hidden', 'true'); ph.textContent = '♙';
+        img.replaceWith(ph);
+      }
+    }, true);
+
+    const params = new URLSearchParams(location.search);
+    state.q = params.get('q') || '';
+    state.gender = params.get('gender') || '';
+
     load();
   </script>
 
   <style is:global>
-    .nx-shell{padding-bottom:110px}
-    .nx-shell [hidden]{display:none!important}
-    .nx-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-    .nx-back{display:inline-block;font-size:12px;color:var(--muted);margin-bottom:26px;transition:color .2s}
-    .nx-back:hover{color:var(--purple)}
-    .nx-toolbar{display:grid;grid-template-columns:1fr;gap:10px;margin-top:30px;padding:10px;background:#151827;border:1px solid var(--line);border-radius:14px}
-    .nx-field{display:flex;align-items:center;gap:10px;min-width:0;background:#0c0f1b;border:1px solid #30344a;border-radius:10px;padding:0 12px;transition:border-color .2s}
-    .nx-field:focus-within{border-color:var(--purple)}
-    .nx-icon{font-size:22px;color:var(--purple);line-height:1}
-    .nx-field input{width:100%;min-width:0;height:44px;background:transparent;border:0;outline:0;color:var(--white);font-size:13px}
-    .nx-field input::placeholder{color:#777b90}
-    .nx-field input::-webkit-search-cancel-button{filter:invert(.7)}
-    .nx-field input:disabled{opacity:.5;cursor:wait}
-    .nx-tabs{display:flex;gap:8px;overflow-x:auto;margin-top:30px;padding-bottom:4px;scrollbar-width:none}
-    .nx-tabs::-webkit-scrollbar{display:none}
-    .nx-tab{flex:none;padding:10px 16px;border-radius:999px;border:1px solid var(--line);background:#151827;color:#c9c8d8;font:600 13px 'Space Grotesk';cursor:pointer;transition:all .2s}
-    .nx-tab:hover{border-color:#8e78e7}
-    .nx-tab[aria-selected="true"]{background:#8b73ed2e;border-color:#8b73ed;color:#fff}
-    .nx-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:22px 2px 16px;min-height:20px;font-size:12px;color:var(--muted)}
-    .nx-link{background:none;border:0;padding:0;color:var(--purple);font-size:12px;font-weight:600;cursor:pointer}
-    .nx-link:hover{text-decoration:underline}
-    .nx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:18px}
-    .nx-card{position:relative;display:block;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:linear-gradient(160deg,#1a1e30,#131624);transition:transform .25s,border-color .25s,box-shadow .25s}
-    a.nx-card:hover,a.nx-card:focus-visible{transform:translateY(-4px);border-color:#8e78e7;box-shadow:0 14px 40px #6c55d033;outline:0}
-    .nx-poster{position:relative;aspect-ratio:3/4;background:#0f1220;overflow:hidden;display:grid;place-items:center}
-    .nx-poster.nx-wide{aspect-ratio:16/10}
-    .nx-poster img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transition:transform .5s}
-    a.nx-card:hover .nx-poster img{transform:scale(1.05)}
-    .nx-poster:after{content:"";position:absolute;inset:auto 0 0 0;height:40%;background:linear-gradient(transparent,#0b0d16d9);pointer-events:none}
-    .nx-ph{font:700 52px 'Space Grotesk';color:#6f5fc0;opacity:.7}
-    .nx-badge{position:absolute;z-index:1;top:10px;left:10px;padding:4px 8px;border-radius:7px;font:700 10px 'Space Grotesk';letter-spacing:.5px;color:#cfc4ff;background:#0b0d16d9;border:1px solid #ffffff14}
-    .nx-info{padding:12px 13px 14px}
-    .nx-info h3{margin:0;font:600 14px/1.35 'Space Grotesk';display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .nx-info p{margin:7px 0 0;font-size:11px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .nx-x{position:absolute;z-index:2;top:8px;right:8px;width:32px;height:32px;border-radius:50%;border:1px solid #ffffff22;background:#0b0d16e6;color:#ff9aab;font-size:14px;cursor:pointer}
-    .nx-x:hover{background:#2a1520}
-    .nx-skel .nx-poster,.nx-skel.nx-photo{background:linear-gradient(100deg,#141829 30%,#1e2338 50%,#141829 70%);background-size:200% 100%;animation:nx-shimmer 1.3s infinite linear}
-    .nx-skel .nx-info i{display:block;height:11px;border-radius:6px;background:#1c2033;margin-bottom:8px}
-    .nx-skel .nx-info i:last-child{width:55%;margin:0}
-    @keyframes nx-shimmer{to{background-position:-200% 0}}
-    .nx-btn{margin-top:18px}
-    #nx-error>span{color:#ff8fa3;font:700 34px 'Space Grotesk'}
-    .nx-hero{position:relative;display:grid;grid-template-columns:260px 1fr;gap:34px;align-items:start}
-    .nx-photo{position:relative;aspect-ratio:3/4;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#0f1220;display:grid;place-items:center;box-shadow:0 20px 60px #0006}
-    .nx-photo.nx-sq{aspect-ratio:1/1}
-    .nx-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-    .nx-main{min-width:0}
-    .nx-title{font:600 clamp(30px,4.5vw,50px)/1.1 'Space Grotesk';letter-spacing:-1.5px;margin:16px 0 8px;overflow-wrap:anywhere}
-    .nx-sub{margin:0 0 16px;color:#b4b4c4;font-size:14px;line-height:1.6}
-    .nx-badges{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
-    .nx-pill{padding:6px 11px;border-radius:8px;font:700 11px 'Space Grotesk';letter-spacing:.5px;background:#8b73ed2e;color:#d6ccff;border:1px solid #8b73ed55}
-    .nx-pill.soft{background:#ffffff08;color:#c9c8d8;border-color:var(--line)}
-    .nx-fav{margin-top:4px}
-    .nx-fav.is-on{border-color:#8e78e7;background:#8b73ed2e;color:#fff}
-    .nx-section{margin-top:44px}
-    .nx-section h2{font:600 22px 'Space Grotesk';margin:0 0 14px}
-    .nx-subh{font:600 12px 'Space Grotesk';letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:18px 0 10px}
-    .nx-text{margin:0;line-height:1.85;font-size:14px;color:#c4c3d3;white-space:pre-line;max-width:78ch}
-    .nx-article{max-width:78ch;color:#c4c3d3;font-size:15px;line-height:1.9}
-    .nx-article p{margin:0 0 18px}
-    .nx-article h2,.nx-article h3{font-family:'Space Grotesk';color:var(--white);margin:30px 0 12px}
-    .nx-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
-    .nx-chip{padding:7px 13px;border-radius:999px;font-size:12px;color:#d8d4ed;background:#191d2d;border:1px solid var(--line);transition:border-color .2s}
-    a.nx-chip:hover{border-color:#8e78e7;color:#fff}
-    .nx-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin:0}
-    .nx-facts>div{padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(145deg,#1a1e30,#131624)}
-    .nx-facts dt{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-    .nx-facts dd{margin:0;font:600 14px 'Space Grotesk';overflow-wrap:anywhere}
-    .nx-minis{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:14px}
-    .nx-mini{display:block;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#151827;transition:border-color .2s,transform .2s}
-    .nx-mini:hover{border-color:#8e78e7;transform:translateY(-3px)}
-    .nx-mini .nx-poster{aspect-ratio:3/4}
-    .nx-mini b{display:block;padding:9px 10px 2px;font:600 12px/1.3 'Space Grotesk';display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .nx-mini small{display:block;padding:0 10px 10px;font-size:10px;color:var(--muted)}
-    .nx-rel{list-style:none;margin:0;padding:0;display:grid;gap:8px}
-    .nx-rel li{display:flex;justify-content:space-between;gap:12px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:#151827;font-size:13px}
-    .nx-rel span{color:var(--muted);font-size:12px}
-    .nx-rel a:hover{color:var(--purple)}
-    .nx-sk{display:block;height:14px;border-radius:7px;background:#1c2033;margin-bottom:14px;width:100%}
-    .nx-sk-lg{height:38px;width:70%;margin-top:30px}.nx-sk-sm{width:35%}.nx-sk-md{width:60%}
-    .nx-group{margin-top:34px}
-    .nx-group h2{display:flex;align-items:center;justify-content:space-between;font:600 18px 'Space Grotesk';margin:0 0 12px}
-    .nx-group h2 small{font:400 12px 'Inter',sans-serif;color:var(--muted)}
-    .nx-rows{display:grid;gap:8px}
-    .nx-row{display:flex;align-items:center;gap:14px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#151827;transition:border-color .2s,transform .2s}
-    .nx-row:hover{border-color:#8e78e7;transform:translateX(3px)}
-    .nx-thumb{position:relative;flex:none;width:48px;height:64px;border-radius:8px;overflow:hidden;background:#0f1220;display:grid;place-items:center;color:#6f5fc0;font-weight:700}
-    .nx-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-    .nx-row b{display:block;font:600 14px/1.3 'Space Grotesk'}
-    .nx-row small{display:block;margin-top:3px;font-size:11px;color:var(--muted)}
-    @media(prefers-reduced-motion:reduce){.nx-skel .nx-poster,.nx-skel.nx-photo{animation:none}.nx-card,.nx-poster img,.nx-mini,.nx-row{transition:none}}
+    .cx-shell{padding-bottom:110px}
+    .cx-shell [hidden]{display:none!important}
+    .cx-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+    .cx-toolbar{display:grid;grid-template-columns:1fr 200px;gap:10px;margin-top:34px;padding:10px;background:#151827;border:1px solid var(--line);border-radius:14px}
+    .cx-field{display:flex;align-items:center;gap:10px;min-width:0;background:#0c0f1b;border:1px solid #30344a;border-radius:10px;padding:0 12px;transition:border-color .2s}
+    .cx-field:focus-within{border-color:var(--purple)}
+    .cx-icon{font-size:22px;color:var(--purple);line-height:1}
+    .cx-field input,.cx-field select{width:100%;min-width:0;height:44px;background:transparent;border:0;outline:0;color:var(--white);font-size:13px}
+    .cx-field input::placeholder{color:#777b90}
+    .cx-field input::-webkit-search-cancel-button{filter:invert(.7)}
+    .cx-field select{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:18px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%239b83ff' stroke-width='1.6'%3E%3Cpath d='m1 1 4 4 4-4'/%3E%3C/svg%3E") no-repeat right 0 center}
+    .cx-field select option{background:#131624;color:var(--white)}
+    .cx-field input:disabled,.cx-field select:disabled{opacity:.5;cursor:wait}
+    .cx-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:22px 2px 16px;min-height:20px;font-size:12px;color:var(--muted)}
+    .cx-link{background:none;border:0;padding:0;color:var(--purple);font-size:12px;font-weight:600;cursor:pointer}
+    .cx-link:hover{text-decoration:underline}
+    .cx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:18px}
+    .cx-card{display:block;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:linear-gradient(160deg,#1a1e30,#131624);transition:transform .25s,border-color .25s,box-shadow .25s}
+    a.cx-card:hover,a.cx-card:focus-visible{transform:translateY(-4px);border-color:#8e78e7;box-shadow:0 14px 40px #6c55d033;outline:0}
+    .cx-poster{position:relative;aspect-ratio:3/4;background:#0f1220;overflow:hidden;display:grid;place-items:center}
+    .cx-poster img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top;transition:transform .5s}
+    a.cx-card:hover .cx-poster img{transform:scale(1.05)}
+    .cx-poster:after{content:"";position:absolute;inset:auto 0 0 0;height:40%;background:linear-gradient(transparent,#0b0d16d9);pointer-events:none}
+    .cx-ph{font:700 56px 'Space Grotesk';color:#6f5fc0;opacity:.7}
+    .cx-badge{position:absolute;z-index:1;top:10px;left:10px;padding:4px 8px;border-radius:7px;font:700 10px 'Space Grotesk';letter-spacing:.5px;color:#cfc4ff;background:#0b0d16d9;border:1px solid #ffffff14}
+    .cx-info{padding:12px 13px 14px}
+    .cx-info h3{margin:0;font:600 14px/1.35 'Space Grotesk';display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .cx-info p{margin:7px 0 0;font-size:11px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .cx-skel .cx-poster{background:linear-gradient(100deg,#141829 30%,#1e2338 50%,#141829 70%);background-size:200% 100%;animation:cx-shimmer 1.3s infinite linear}
+    .cx-skel .cx-info i{display:block;height:11px;border-radius:6px;background:#1c2033;margin-bottom:8px}
+    .cx-skel .cx-info i:last-child{width:55%;margin:0}
+    @keyframes cx-shimmer{to{background-position:-200% 0}}
+    .cx-btn{margin-top:18px}
+    #cx-error>span{color:#ff8fa3;font:700 34px 'Space Grotesk'}
+    @media(prefers-reduced-motion:reduce){.cx-skel .cx-poster{animation:none}.cx-card,.cx-poster img{transition:none}}
     @media(max-width:760px){
-      .nx-shell{padding-bottom:120px}
-      .nx-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-      .nx-info{padding:10px 11px 12px}.nx-info h3{font-size:13px}
-      .nx-hero{grid-template-columns:1fr;gap:22px}
-      .nx-photo{width:min(62%,230px);margin:0 auto}
-      .nx-title{font-size:30px;letter-spacing:-1px}
-      .nx-section{margin-top:34px}
-      .nx-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
-      .nx-minis{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+      .cx-shell{padding-bottom:120px}
+      .cx-toolbar{grid-template-columns:1fr;margin-top:26px}
+      .cx-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+      .cx-info{padding:10px 11px 12px}
+      .cx-info h3{font-size:13px}
+      .cx-ph{font-size:44px}
     }
   </style>
 </BaseLayout>
