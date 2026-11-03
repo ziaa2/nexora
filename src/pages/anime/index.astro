@@ -2,12 +2,290 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Header from '../../components/Header.astro';
 import BottomNav from '../../components/BottomNav.astro';
+
+// Base path Astro ("/nexora"), tanpa trailing slash.
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 ---
-<BaseLayout title="Anime Explorer — NEXORA">
+<BaseLayout title="Anime Explorer — NEXORA" description="Jelajahi seluruh anime yang terdaftar di NEXORA.">
   <Header />
-  <main class="page-shell">
+  <main class="page-shell ax-shell">
     <span class="eyebrow">DATABASE DIRECTORY</span><h1>Anime <em>Explorer.</em></h1>
     <p class="muted">Jelajahi seluruh anime yang terdaftar di NEXORA.</p>
-    <div class="empty-state"><span>◈</span><h2>Database sedang disiapkan</h2><p>Anime yang sudah dipublikasikan akan muncul di halaman ini.</p></div>
-  </main><BottomNav />
+
+    <div id="ax-root" data-base={base}>
+      <form class="ax-toolbar" id="ax-toolbar" role="search" autocomplete="off" onsubmit="return false">
+        <label class="ax-field ax-search" for="ax-q">
+          <span class="ax-icon" aria-hidden="true">⌕</span>
+          <input id="ax-q" type="search" placeholder="Cari judul anime..." maxlength="120" disabled />
+        </label>
+        <label class="ax-field ax-select" for="ax-type">
+          <span class="ax-sr">Tipe anime</span>
+          <select id="ax-type" disabled><option value="">Semua tipe</option></select>
+        </label>
+        <label class="ax-field ax-select" for="ax-year">
+          <span class="ax-sr">Tahun rilis</span>
+          <select id="ax-year" disabled><option value="">Semua tahun</option></select>
+        </label>
+      </form>
+
+      <div class="ax-meta">
+        <span id="ax-count" aria-live="polite">Memuat data…</span>
+        <button type="button" id="ax-reset" class="ax-link" hidden>Reset filter</button>
+      </div>
+
+      <div id="ax-grid" class="ax-grid" aria-busy="true">
+        {Array.from({ length: 8 }).map(() => (
+          <div class="ax-card ax-skel" aria-hidden="true"><div class="ax-poster"></div><div class="ax-info"><i></i><i></i></div></div>
+        ))}
+      </div>
+
+      <div id="ax-empty" class="empty-state" hidden>
+        <span>◈</span>
+        <h2 id="ax-empty-title">Belum ada anime</h2>
+        <p id="ax-empty-text">Anime yang sudah dipublikasikan akan muncul di halaman ini.</p>
+        <button type="button" id="ax-empty-reset" class="button ghost ax-empty-btn" hidden>Reset filter</button>
+      </div>
+
+      <div id="ax-error" class="empty-state" hidden role="alert">
+        <span>!</span>
+        <h2>Gagal memuat anime</h2>
+        <p>Terjadi masalah saat mengambil data dari database. Periksa koneksi internetmu lalu coba lagi.</p>
+        <button type="button" id="ax-retry" class="button primary ax-empty-btn">Coba lagi</button>
+      </div>
+    </div>
+  </main>
+  <BottomNav />
+
+  <script>
+    // Kolom yang dipakai (sesuai skema tabel public.anime).
+    const COLUMNS = 'id,slug,title,title_japanese,anime_type,release_year,score,image_url';
+    const PAGE_SIZE = 1000;
+
+    const root = document.querySelector('#ax-root');
+    const base = (root.dataset.base || '').replace(/\/+$/, '');
+    // Halaman detail dikerjakan di Tahap 2. Satu tempat untuk mengubah format URL-nya.
+    const detailUrl = (slug) => `${base}/anime/detail/?slug=${encodeURIComponent(slug)}`;
+
+    const $ = (s) => root.querySelector(s);
+    const els = {
+      q: $('#ax-q'), type: $('#ax-type'), year: $('#ax-year'),
+      grid: $('#ax-grid'), count: $('#ax-count'), reset: $('#ax-reset'),
+      empty: $('#ax-empty'), emptyTitle: $('#ax-empty-title'), emptyText: $('#ax-empty-text'), emptyReset: $('#ax-empty-reset'),
+      error: $('#ax-error'), retry: $('#ax-retry'),
+    };
+
+    const state = { all: [], q: '', type: '', year: '' };
+
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function show(view) {
+      els.grid.hidden = view !== 'grid';
+      els.empty.hidden = view !== 'empty';
+      els.error.hidden = view !== 'error';
+      els.grid.setAttribute('aria-busy', view === 'loading' ? 'true' : 'false');
+    }
+
+    function setControlsDisabled(disabled) {
+      els.q.disabled = els.type.disabled = els.year.disabled = disabled;
+    }
+
+    async function fetchAllPublished() {
+      const { supabase } = await import('../../lib/supabase.js');
+      const rows = [];
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('anime')
+          .select(COLUMNS)
+          .eq('publication_status', 'published')
+          .order('title', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < PAGE_SIZE) break;
+      }
+      return rows;
+    }
+
+    function fillOptions() {
+      const types = [...new Set(state.all.map((a) => a.anime_type).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      const years = [...new Set(state.all.map((a) => a.release_year).filter((y) => y !== null && y !== undefined))].sort((a, b) => b - a);
+      els.type.innerHTML = '<option value="">Semua tipe</option>' + types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+      els.year.innerHTML = '<option value="">Semua tahun</option>' + years.map((y) => `<option value="${esc(y)}">${esc(y)}</option>`).join('');
+      // Pulihkan filter dari URL hanya jika nilainya memang ada di data.
+      if (types.includes(state.type)) els.type.value = state.type; else state.type = '';
+      if (years.map(String).includes(state.year)) els.year.value = state.year; else state.year = '';
+    }
+
+    function cardHtml(a) {
+      const title = a.title || 'Tanpa judul';
+      const score = a.score !== null && a.score !== undefined && !Number.isNaN(Number(a.score)) && Number(a.score) > 0 ? Number(a.score).toFixed(1) : '';
+      const poster = a.image_url
+        ? `<img src="${esc(a.image_url)}" alt="Poster ${esc(title)}" loading="lazy" decoding="async" />`
+        : '<span class="ax-ph" aria-hidden="true">N</span>';
+      const meta = [a.anime_type, a.release_year].filter(Boolean).map(esc).join(' · ') || 'Data belum lengkap';
+      const inner = `
+        <div class="ax-poster">${poster}
+          ${a.anime_type ? `<span class="ax-badge">${esc(a.anime_type)}</span>` : ''}
+          ${score ? `<span class="ax-score" title="Rating"><b>★</b> ${score}</span>` : ''}
+        </div>
+        <div class="ax-info"><h3>${esc(title)}</h3><p>${meta}</p></div>`;
+      return a.slug
+        ? `<a class="ax-card" href="${esc(detailUrl(a.slug))}" aria-label="${esc(title)}">${inner}</a>`
+        : `<div class="ax-card ax-static">${inner}</div>`;
+    }
+
+    function filtered() {
+      const needle = state.q.trim().toLowerCase();
+      return state.all.filter((a) =>
+        (!state.type || a.anime_type === state.type) &&
+        (!state.year || String(a.release_year) === state.year) &&
+        (!needle || (a.title || '').toLowerCase().includes(needle) || (a.title_japanese || '').toLowerCase().includes(needle))
+      );
+    }
+
+    function render() {
+      const hasFilter = Boolean(state.q.trim() || state.type || state.year);
+      els.reset.hidden = !hasFilter;
+
+      if (!state.all.length) {
+        els.count.textContent = '0 anime';
+        els.emptyTitle.textContent = 'Belum ada anime';
+        els.emptyText.textContent = 'Anime yang sudah dipublikasikan akan muncul di halaman ini.';
+        els.emptyReset.hidden = true;
+        show('empty');
+        return;
+      }
+
+      const list = filtered();
+      els.count.textContent = hasFilter ? `${list.length} dari ${state.all.length} anime` : `${list.length} anime`;
+
+      if (!list.length) {
+        els.emptyTitle.textContent = 'Tidak ada hasil';
+        els.emptyText.textContent = 'Tidak ada anime yang cocok dengan pencarian atau filter yang dipilih.';
+        els.emptyReset.hidden = false;
+        show('empty');
+        return;
+      }
+
+      els.grid.innerHTML = list.map(cardHtml).join('');
+      show('grid');
+    }
+
+    function syncUrl() {
+      const p = new URLSearchParams();
+      if (state.q.trim()) p.set('q', state.q.trim());
+      if (state.type) p.set('type', state.type);
+      if (state.year) p.set('year', state.year);
+      const qs = p.toString();
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+    }
+
+    function update() { syncUrl(); render(); }
+
+    function resetFilters() {
+      state.q = state.type = state.year = '';
+      els.q.value = ''; els.type.value = ''; els.year.value = '';
+      update();
+      els.q.focus();
+    }
+
+    async function load() {
+      setControlsDisabled(true);
+      els.count.textContent = 'Memuat data…';
+      els.reset.hidden = true;
+      els.grid.innerHTML = Array.from({ length: 8 }, () => '<div class="ax-card ax-skel" aria-hidden="true"><div class="ax-poster"></div><div class="ax-info"><i></i><i></i></div></div>').join('');
+      show('loading');
+      try {
+        state.all = await fetchAllPublished();
+        fillOptions();
+        setControlsDisabled(false);
+        els.q.value = state.q;
+        render();
+      } catch (err) {
+        console.error('[NEXORA] Gagal memuat anime:', err);
+        els.count.textContent = 'Gagal memuat data';
+        show('error');
+      }
+    }
+
+    // Event listener
+    let timer;
+    els.q.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { state.q = els.q.value; update(); }, 150);
+    });
+    els.type.addEventListener('change', () => { state.type = els.type.value; update(); });
+    els.year.addEventListener('change', () => { state.year = els.year.value; update(); });
+    els.reset.addEventListener('click', resetFilters);
+    els.emptyReset.addEventListener('click', resetFilters);
+    els.retry.addEventListener('click', load);
+    // Error gambar tidak bubble, jadi pakai capture: ganti poster rusak dengan placeholder.
+    els.grid.addEventListener('error', (e) => {
+      const img = e.target;
+      if (img instanceof HTMLImageElement) {
+        const ph = document.createElement('span');
+        ph.className = 'ax-ph'; ph.setAttribute('aria-hidden', 'true'); ph.textContent = 'N';
+        img.replaceWith(ph);
+      }
+    }, true);
+
+    // Nilai awal dari URL (?q=&type=&year=)
+    const params = new URLSearchParams(location.search);
+    state.q = params.get('q') || '';
+    state.type = params.get('type') || '';
+    state.year = params.get('year') || '';
+
+    load();
+  </script>
+
+  <style is:global>
+    .ax-shell{padding-bottom:110px}
+    .ax-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+    .ax-toolbar{display:grid;grid-template-columns:1fr 170px 150px;gap:10px;margin-top:34px;padding:10px;background:#151827;border:1px solid var(--line);border-radius:14px}
+    .ax-field{display:flex;align-items:center;gap:10px;min-width:0;background:#0c0f1b;border:1px solid #30344a;border-radius:10px;padding:0 12px;transition:border-color .2s}
+    .ax-field:focus-within{border-color:var(--purple)}
+    .ax-icon{font-size:22px;color:var(--purple);line-height:1}
+    .ax-field input,.ax-field select{width:100%;min-width:0;height:44px;background:transparent;border:0;outline:0;color:var(--white);font-size:13px}
+    .ax-field input::placeholder{color:#777b90}
+    .ax-field input::-webkit-search-cancel-button{filter:invert(.7)}
+    .ax-field select{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:18px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%239b83ff' stroke-width='1.6'%3E%3Cpath d='m1 1 4 4 4-4'/%3E%3C/svg%3E") no-repeat right 0 center}
+    .ax-field select option{background:#131624;color:var(--white)}
+    .ax-field input:disabled,.ax-field select:disabled{opacity:.5;cursor:wait}
+    .ax-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:22px 2px 16px;min-height:20px;font-size:12px;color:var(--muted)}
+    .ax-link{background:none;border:0;padding:0;color:var(--purple);font-size:12px;font-weight:600;cursor:pointer}
+    .ax-link:hover{text-decoration:underline}
+    .ax-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:18px}
+    .ax-grid[hidden],.ax-meta [hidden],#ax-empty[hidden],#ax-error[hidden]{display:none}
+    .ax-card{display:block;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:linear-gradient(160deg,#1a1e30,#131624);transition:transform .25s,border-color .25s,box-shadow .25s}
+    a.ax-card:hover,a.ax-card:focus-visible{transform:translateY(-4px);border-color:#8e78e7;box-shadow:0 14px 40px #6c55d033;outline:0}
+    .ax-poster{position:relative;aspect-ratio:2/3;background:#0f1220;overflow:hidden;display:grid;place-items:center}
+    .ax-poster img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transition:transform .5s}
+    a.ax-card:hover .ax-poster img{transform:scale(1.05)}
+    .ax-poster:after{content:"";position:absolute;inset:auto 0 0 0;height:45%;background:linear-gradient(transparent,#0b0d16d9);pointer-events:none}
+    .ax-ph{font:700 56px 'Space Grotesk';color:#6f5fc0;opacity:.7}
+    .ax-badge,.ax-score{position:absolute;z-index:1;top:10px;padding:4px 8px;border-radius:7px;font:700 10px 'Space Grotesk';letter-spacing:.5px;background:#0b0d16d9;backdrop-filter:blur(6px);border:1px solid #ffffff14}
+    .ax-badge{left:10px;color:#cfc4ff}
+    .ax-score{right:10px;color:#f2f1f8}
+    .ax-score b{color:#ffd166;font-weight:400}
+    .ax-info{padding:12px 13px 14px}
+    .ax-info h3{margin:0;font:600 14px/1.35 'Space Grotesk';display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.7em}
+    .ax-info p{margin:7px 0 0;font-size:11px;color:var(--muted)}
+    .ax-skel .ax-poster{background:linear-gradient(100deg,#141829 30%,#1e2338 50%,#141829 70%);background-size:200% 100%;animation:ax-shimmer 1.3s infinite linear}
+    .ax-skel .ax-info i{display:block;height:11px;border-radius:6px;background:#1c2033;margin-bottom:8px}
+    .ax-skel .ax-info i:last-child{width:55%;margin:0}
+    @keyframes ax-shimmer{to{background-position:-200% 0}}
+    .ax-empty-btn{margin-top:18px}
+    #ax-error>span{color:#ff8fa3;font:700 34px 'Space Grotesk'}
+    @media(prefers-reduced-motion:reduce){.ax-skel .ax-poster{animation:none}.ax-card,.ax-poster img{transition:none}}
+    @media(max-width:760px){
+      .ax-shell{padding-bottom:120px}
+      .ax-toolbar{grid-template-columns:1fr 1fr;margin-top:26px}
+      .ax-search{grid-column:1/-1}
+      .ax-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+      .ax-info{padding:10px 11px 12px}
+      .ax-info h3{font-size:13px}
+      .ax-ph{font-size:44px}
+    }
+  </style>
 </BaseLayout>
