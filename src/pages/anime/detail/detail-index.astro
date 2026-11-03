@@ -1,0 +1,253 @@
+---
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Header from '../../../components/Header.astro';
+import BottomNav from '../../../components/BottomNav.astro';
+
+// Base path Astro ("/nexora"), tanpa trailing slash.
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+---
+<BaseLayout title="Detail Anime — NEXORA" description="Informasi lengkap anime di NEXORA.">
+  <Header />
+  <main class="page-shell ad-shell">
+    <div id="ad-root" data-base={base}>
+      <a class="ad-back" id="ad-back" href={`${base}/anime/`}>← Kembali ke Anime Explorer</a>
+
+      <div id="ad-loading" class="ad-hero" aria-busy="true" aria-label="Memuat detail anime">
+        <div class="ad-poster ad-skel"></div>
+        <div class="ad-main">
+          <i class="ad-sk ad-sk-lg"></i><i class="ad-sk ad-sk-sm"></i><i class="ad-sk"></i><i class="ad-sk"></i><i class="ad-sk ad-sk-md"></i>
+        </div>
+      </div>
+
+      <article id="ad-content" hidden></article>
+
+      <div id="ad-notfound" class="empty-state" hidden>
+        <span>◈</span>
+        <h2>Anime tidak ditemukan</h2>
+        <p>Anime ini belum dipublikasikan, sudah dihapus, atau tautannya tidak valid.</p>
+        <a class="button ghost ad-btn" href={`${base}/anime/`}>Lihat semua anime</a>
+      </div>
+
+      <div id="ad-error" class="empty-state" hidden role="alert">
+        <span>!</span>
+        <h2>Gagal memuat anime</h2>
+        <p>Terjadi masalah saat mengambil data dari database. Periksa koneksi internetmu lalu coba lagi.</p>
+        <button type="button" id="ad-retry" class="button primary ad-btn">Coba lagi</button>
+      </div>
+    </div>
+  </main>
+  <BottomNav />
+
+  <script>
+    // Kolom yang dipakai (sesuai skema tabel public.anime).
+    const COLUMNS = 'id,slug,title,title_japanese,alternative_titles,synopsis,image_url,banner_url,image_source_url,image_credit,image_license,anime_type,airing_status,release_year,start_date,end_date,episodes,score,source,source_url';
+
+    const root = document.querySelector('#ad-root');
+    const $ = (s) => root.querySelector(s);
+    const els = {
+      loading: $('#ad-loading'), content: $('#ad-content'),
+      notfound: $('#ad-notfound'), error: $('#ad-error'), retry: $('#ad-retry'),
+    };
+
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const safeUrl = (u) => { try { const x = new URL(String(u)); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } };
+    const has = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+
+    const STATUS_ID = {
+      'finished airing': 'Selesai tayang', 'currently airing': 'Sedang tayang', 'not yet aired': 'Belum tayang',
+      finished: 'Selesai tayang', airing: 'Sedang tayang', upcoming: 'Belum tayang',
+    };
+    const statusLabel = (s) => STATUS_ID[String(s).trim().toLowerCase()] || s;
+
+    function fmtDate(d) {
+      if (!has(d)) return '';
+      const dt = new Date(d);
+      return Number.isNaN(dt.getTime()) ? String(d) : dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+    }
+
+    // alternative_titles bisa berupa array, objek, atau teks: kumpulkan semua string uniknya.
+    function flattenTitles(v, out = []) {
+      if (v === null || v === undefined) return out;
+      if (typeof v === 'string') { const t = v.trim(); if (t) out.push(t); }
+      else if (Array.isArray(v)) v.forEach((x) => flattenTitles(x, out));
+      else if (typeof v === 'object') Object.values(v).forEach((x) => flattenTitles(x, out));
+      return out;
+    }
+
+    function show(view) {
+      els.loading.hidden = view !== 'loading';
+      els.content.hidden = view !== 'content';
+      els.notfound.hidden = view !== 'notfound';
+      els.error.hidden = view !== 'error';
+    }
+
+    // Relasi (genre, studio, producer) bersifat pelengkap: jika gagal, halaman tetap tampil.
+    async function fetchNames(supabase, junction, rel, animeId) {
+      try {
+        const { data, error } = await supabase.from(junction).select(`${rel}(*)`).eq('anime_id', animeId);
+        if (error) throw error;
+        const names = (data || []).map((r) => r?.[rel]).filter(Boolean).map((x) => x.name ?? x.title).filter(has);
+        return [...new Set(names)];
+      } catch (err) {
+        console.warn(`[NEXORA] Relasi ${junction} dilewati:`, err?.message || err);
+        return [];
+      }
+    }
+
+    function chips(list) {
+      return list.map((n) => `<span class="ad-chip">${esc(n)}</span>`).join('');
+    }
+
+    function render(a, extra) {
+      const title = a.title || 'Tanpa judul';
+      document.title = `${title} — NEXORA`;
+
+      const image = safeUrl(a.image_url);
+      const banner = safeUrl(a.banner_url);
+      const score = has(a.score) && Number(a.score) > 0 ? Number(a.score).toFixed(1) : '';
+      const altTitles = [...new Set(flattenTitles(a.alternative_titles))]
+        .filter((t) => t !== a.title && t !== a.title_japanese).slice(0, 8);
+
+      const badges = [
+        a.anime_type && `<span class="ad-badge">${esc(a.anime_type)}</span>`,
+        a.release_year && `<span class="ad-badge ad-badge-soft">${esc(a.release_year)}</span>`,
+        a.airing_status && `<span class="ad-badge ad-badge-soft">${esc(statusLabel(a.airing_status))}</span>`,
+      ].filter(Boolean).join('');
+
+      const facts = [
+        ['Tipe', a.anime_type],
+        ['Status', has(a.airing_status) ? statusLabel(a.airing_status) : ''],
+        ['Episode', a.episodes],
+        ['Tahun rilis', a.release_year],
+        ['Mulai tayang', fmtDate(a.start_date)],
+        ['Selesai tayang', fmtDate(a.end_date)],
+        ['Sumber cerita', a.source],
+      ].filter(([, v]) => has(v));
+
+      const credit = [];
+      if (has(a.image_credit)) credit.push(`Artwork: ${esc(a.image_credit)}`);
+      if (has(a.image_license)) credit.push(`Lisensi: ${esc(a.image_license)}`);
+      const imgSrc = safeUrl(a.image_source_url);
+      const srcUrl = safeUrl(a.source_url);
+
+      els.content.innerHTML = `
+        ${banner ? `<div class="ad-banner" style="background-image:url('${esc(banner)}')"></div>` : ''}
+        <section class="ad-hero">
+          <div class="ad-poster">${image ? `<img src="${esc(image)}" alt="Poster ${esc(title)}" decoding="async" />` : '<span class="ad-ph" aria-hidden="true">N</span>'}</div>
+          <div class="ad-main">
+            <span class="eyebrow">ANIME DETAIL</span>
+            <h1 class="ad-title">${esc(title)}</h1>
+            ${has(a.title_japanese) ? `<p class="ad-jp" lang="ja">${esc(a.title_japanese)}</p>` : ''}
+            <div class="ad-badges">${badges}${score ? `<span class="ad-score"><b>★</b> ${score}</span>` : ''}</div>
+            ${extra.genres.length ? `<div class="ad-chips" aria-label="Genre">${chips(extra.genres)}</div>` : ''}
+            ${srcUrl ? `<a class="button ghost ad-ext" href="${esc(srcUrl)}" target="_blank" rel="noopener noreferrer">Lihat sumber data ↗</a>` : ''}
+          </div>
+        </section>
+
+        <section class="ad-section">
+          <h2>Sinopsis</h2>
+          ${has(a.synopsis) ? `<p class="ad-synopsis">${esc(a.synopsis)}</p>` : '<p class="muted">Sinopsis belum tersedia.</p>'}
+        </section>
+
+        ${facts.length ? `<section class="ad-section"><h2>Informasi</h2>
+          <dl class="ad-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>` : ''}
+
+        ${extra.studios.length || extra.producers.length ? `<section class="ad-section"><h2>Produksi</h2>
+          ${extra.studios.length ? `<h3 class="ad-sub">Studio</h3><div class="ad-chips">${chips(extra.studios)}</div>` : ''}
+          ${extra.producers.length ? `<h3 class="ad-sub">Produser</h3><div class="ad-chips">${chips(extra.producers)}</div>` : ''}</section>` : ''}
+
+        ${altTitles.length ? `<section class="ad-section"><h2>Judul alternatif</h2><ul class="ad-alt">${altTitles.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>` : ''}
+
+        ${credit.length || imgSrc ? `<p class="ad-credit">${credit.join(' · ')}${imgSrc ? `${credit.length ? ' · ' : ''}<a href="${esc(imgSrc)}" target="_blank" rel="noopener noreferrer">Sumber gambar ↗</a>` : ''}</p>` : ''}
+      `;
+
+      // Poster/banner rusak: ganti dengan placeholder.
+      const img = els.content.querySelector('.ad-poster img');
+      if (img) img.addEventListener('error', () => {
+        const ph = document.createElement('span');
+        ph.className = 'ad-ph'; ph.setAttribute('aria-hidden', 'true'); ph.textContent = 'N';
+        img.replaceWith(ph);
+      });
+      show('content');
+    }
+
+    async function load() {
+      const slug = (new URLSearchParams(location.search).get('slug') || '').trim();
+      if (!slug) { show('notfound'); return; }
+      show('loading');
+      try {
+        const { supabase } = await import('../../../lib/supabase.js');
+        const { data, error } = await supabase
+          .from('anime')
+          .select(COLUMNS)
+          .eq('slug', slug)
+          .eq('publication_status', 'published')
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) { show('notfound'); return; }
+        const [genres, studios, producers] = await Promise.all([
+          fetchNames(supabase, 'anime_genres', 'genres', data.id),
+          fetchNames(supabase, 'anime_studios', 'studios', data.id),
+          fetchNames(supabase, 'anime_producers', 'producers', data.id),
+        ]);
+        render(data, { genres, studios, producers });
+      } catch (err) {
+        console.error('[NEXORA] Gagal memuat detail anime:', err);
+        show('error');
+      }
+    }
+
+    els.retry.addEventListener('click', load);
+    load();
+  </script>
+
+  <style is:global>
+    .ad-shell{padding-top:48px;padding-bottom:110px}
+    .ad-shell [hidden]{display:none!important}
+    .ad-back{display:inline-block;font-size:12px;color:var(--muted);margin-bottom:26px;transition:color .2s}
+    .ad-back:hover{color:var(--purple)}
+    .ad-banner{height:200px;margin:0 0 -90px;border-radius:16px;background-size:cover;background-position:center;position:relative;opacity:.55;-webkit-mask-image:linear-gradient(#000 30%,transparent);mask-image:linear-gradient(#000 30%,transparent)}
+    .ad-hero{position:relative;display:grid;grid-template-columns:260px 1fr;gap:34px;align-items:start}
+    .ad-poster{position:relative;aspect-ratio:2/3;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#0f1220;display:grid;place-items:center;box-shadow:0 20px 60px #0006}
+    .ad-poster img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+    .ad-ph{font:700 80px 'Space Grotesk';color:#6f5fc0;opacity:.7}
+    .ad-main{min-width:0}
+    .ad-title{font:600 clamp(30px,4.5vw,50px)/1.1 'Space Grotesk';letter-spacing:-1.5px;margin:16px 0 8px;overflow-wrap:anywhere}
+    .ad-jp{margin:0 0 18px;color:#b4b4c4;font-size:15px}
+    .ad-badges{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+    .ad-badge{padding:6px 11px;border-radius:8px;font:700 11px 'Space Grotesk';letter-spacing:.5px;background:#8b73ed2e;color:#d6ccff;border:1px solid #8b73ed55}
+    .ad-badge-soft{background:#ffffff08;color:#c9c8d8;border-color:var(--line)}
+    .ad-score{padding:6px 11px;border-radius:8px;font:700 12px 'Space Grotesk';background:#ffffff08;border:1px solid var(--line)}
+    .ad-score b{color:#ffd166;font-weight:400}
+    .ad-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+    .ad-chip{padding:6px 12px;border-radius:999px;font-size:12px;color:#d8d4ed;background:#191d2d;border:1px solid var(--line)}
+    .ad-ext{margin-top:4px}
+    .ad-section{margin-top:44px}
+    .ad-section h2{font:600 22px 'Space Grotesk';margin:0 0 14px}
+    .ad-sub{font:600 12px 'Space Grotesk';letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px}
+    .ad-synopsis{margin:0;line-height:1.85;font-size:14px;color:#c4c3d3;white-space:pre-line;max-width:78ch}
+    .ad-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin:0}
+    .ad-facts>div{padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(145deg,#1a1e30,#131624)}
+    .ad-facts dt{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+    .ad-facts dd{margin:0;font:600 14px 'Space Grotesk';overflow-wrap:anywhere}
+    .ad-alt{margin:0;padding-left:18px;color:#c4c3d3;font-size:13px;line-height:1.9}
+    .ad-credit{margin-top:40px;font-size:11px;color:#777b90}
+    .ad-credit a{color:var(--purple)}
+    .ad-btn{margin-top:18px}
+    #ad-error>span{color:#ff8fa3;font:700 34px 'Space Grotesk'}
+    .ad-skel{background:linear-gradient(100deg,#141829 30%,#1e2338 50%,#141829 70%);background-size:200% 100%;animation:ad-shimmer 1.3s infinite linear}
+    .ad-sk{display:block;height:14px;border-radius:7px;background:#1c2033;margin-bottom:14px;width:100%}
+    .ad-sk-lg{height:38px;width:70%;margin-top:30px}.ad-sk-sm{width:35%}.ad-sk-md{width:60%}
+    @keyframes ad-shimmer{to{background-position:-200% 0}}
+    @media(prefers-reduced-motion:reduce){.ad-skel{animation:none}}
+    @media(max-width:760px){
+      .ad-shell{padding-top:30px;padding-bottom:120px}
+      .ad-banner{height:150px;margin-bottom:-70px}
+      .ad-hero{grid-template-columns:1fr;gap:22px}
+      .ad-poster{width:min(62%,230px);margin:0 auto}
+      .ad-title{font-size:30px;letter-spacing:-1px}
+      .ad-section{margin-top:34px}
+      .ad-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+  </style>
+</BaseLayout>
